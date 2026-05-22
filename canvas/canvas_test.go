@@ -24,7 +24,7 @@ func TestSmokeRender(t *testing.T) {
 			c.SetStrokeWidth(1)
 			c.DrawLine(100, 10, 100, 90)
 
-			c.DrawText(100, 95, "hello zcharts", TextStyle{
+			c.DrawText(100, 95, "中文 zcharts", TextStyle{
 				Size:   14,
 				Color:  color.MustParse("#333"),
 				Anchor: AnchorMiddle,

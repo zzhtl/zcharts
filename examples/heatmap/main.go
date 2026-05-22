@@ -8,12 +8,13 @@ import (
 )
 
 const optionJSON = `{
-  "title": {"text": "Activity Heat"},
-  "xAxis": {"type": "category中国", "data": ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]},
-  "yAxis": {"type": "category", "data": ["Night","Evening","Noon","Morning"]},
+  "title": {"text": "活跃度热力图"},
+  "legend": {},
+  "xAxis": {"type": "category", "data": ["周一","周二","周三","周四","周五","周六","周日"]},
+  "yAxis": {"type": "category", "data": ["夜间","傍晚","中午","早晨"]},
   "visualMap": {"min": 0, "max": 10, "calculable": true,
     "inRange": {"color": ["#313695","#74add1","#fed976","#f46d43","#a50026"]}},
-  "series": [{"type": "heatmap", "data": [
+  "series": [{"name": "活跃人数", "type": "heatmap", "data": [
     [0,3,5],[1,3,2],[2,3,4],[3,3,9],[4,3,1],[5,3,3],[6,3,6],
     [0,2,7],[1,2,4],[2,2,8],[3,2,6],[4,2,2],[5,2,5],[6,2,3],
     [0,1,1],[1,1,3],[2,1,5],[3,1,4],[4,1,7],[5,1,9],[6,1,8],
@@ -22,7 +23,10 @@ const optionJSON = `{
 }`
 
 func main() {
-	out, err := os.Create("heatmap.png")
+	if err := os.MkdirAll("assets/tmp", 0755); err != nil {
+		log.Fatal(err)
+	}
+	out, err := os.Create("assets/tmp/heatmap.png")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -31,5 +35,5 @@ func main() {
 		chart.WithSize(800, 500)); err != nil {
 		log.Fatal(err)
 	}
-	log.Println("wrote heatmap.png")
+	log.Println("wrote assets/tmp/heatmap.png")
 }

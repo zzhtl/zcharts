@@ -8,19 +8,24 @@ import (
 )
 
 const optionJSON = `{
-  "title": {"text": "Server Load"},
+  "title": {"text": "服务器负载"},
+  "legend": {},
   "series": [{
+    "name": "CPU 使用率",
     "type": "gauge",
     "min": 0,
     "max": 100,
     "center": ["50%", "55%"],
     "radius": "70%",
-    "data": [{"value": 72, "name": "CPU"}]
+    "data": [{"value": 72, "name": "CPU 使用率"}]
   }]
 }`
 
 func main() {
-	out, err := os.Create("gauge.png")
+	if err := os.MkdirAll("assets/tmp", 0755); err != nil {
+		log.Fatal(err)
+	}
+	out, err := os.Create("assets/tmp/gauge.png")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -29,5 +34,5 @@ func main() {
 		chart.WithSize(600, 500)); err != nil {
 		log.Fatal(err)
 	}
-	log.Println("wrote gauge.png")
+	log.Println("wrote assets/tmp/gauge.png")
 }

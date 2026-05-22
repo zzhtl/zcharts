@@ -14,6 +14,9 @@ func TestNewHasDefault(t *testing.T) {
 	if face == nil {
 		t.Fatal("face nil")
 	}
+	if advance, ok := face.GlyphAdvance('中'); !ok || advance == 0 {
+		t.Fatalf("default font should support chinese glyph, ok=%v advance=%v", ok, advance)
+	}
 }
 
 func TestFallbackFamily(t *testing.T) {

@@ -8,16 +8,20 @@ import (
 )
 
 const optionJSON = `{
-  "title": {"text": "Height vs Weight"},
-  "xAxis": {"type": "value", "name": "Weight (kg)"},
-  "yAxis": {"type": "value", "name": "Height (cm)"},
-  "series": [{"type": "scatter", "symbolSize": 16,
+  "title": {"text": "身高体重分布"},
+  "legend": {},
+  "xAxis": {"type": "value", "name": "体重 (kg)"},
+  "yAxis": {"type": "value", "name": "身高 (cm)"},
+  "series": [{"name": "样本数据", "type": "scatter", "symbolSize": 16,
     "data": [[60, 170],[55, 165],[70, 175],[80, 180],[75, 178],[50, 160],[85, 185],[68, 172],[62, 168],[77, 182]]
   }]
 }`
 
 func main() {
-	out, err := os.Create("scatter.png")
+	if err := os.MkdirAll("assets/tmp", 0755); err != nil {
+		log.Fatal(err)
+	}
+	out, err := os.Create("assets/tmp/scatter.png")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -26,5 +30,5 @@ func main() {
 		chart.WithSize(800, 500)); err != nil {
 		log.Fatal(err)
 	}
-	log.Println("wrote scatter.png")
+	log.Println("wrote assets/tmp/scatter.png")
 }

@@ -1,8 +1,9 @@
 module github.com/zzhtl/zcharts
 
-go 1.25.0
+go 1.26.3
 
 require (
+	github.com/hajimehoshi/chinesegamefonts v1.0.0
 	github.com/tdewolff/canvas v0.0.0-20260508100355-63a7228e682d
 	golang.org/x/image v0.41.0
 )

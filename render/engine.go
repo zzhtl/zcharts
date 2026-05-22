@@ -403,15 +403,46 @@ func drawLegend(ctx *Context) {
 		return
 	}
 	items := make([]layout.LegendItem, 0, len(ctx.Option.Series))
+	seen := map[string]bool{}
 	for i, s := range ctx.Option.Series {
-		name := s.GetName()
-		if name == "" {
-			continue
+		switch v := s.(type) {
+		case *option.PieSeries:
+			for j, d := range v.Data {
+				addLegendItem(&items, seen, d.Name, paletteFor(ctx).At(j))
+			}
+		case *option.RadarSeries:
+			for j, d := range v.Data {
+				addLegendItem(&items, seen, d.Name, paletteFor(ctx).At(j))
+			}
+			addLegendItem(&items, seen, v.GetName(), ctx.SeriesColor(i))
+		default:
+			addLegendItem(&items, seen, s.GetName(), ctx.SeriesColor(i))
 		}
-		items = append(items, layout.LegendItem{
-			Name:  name,
-			Color: ctx.SeriesColor(i),
-		})
+	}
+	if ctx.Option.Legend != nil && len(ctx.Option.Legend.Data) > 0 {
+		items = filterLegendItems(items, ctx.Option.Legend.Data)
 	}
 	layout.DrawLegend(ctx.Canvas, ctx.Bounds, items, ctx.Option.Legend, ctx.Theme)
+}
+
+func addLegendItem(items *[]layout.LegendItem, seen map[string]bool, name string, col color.Color) {
+	if name == "" || seen[name] {
+		return
+	}
+	seen[name] = true
+	*items = append(*items, layout.LegendItem{Name: name, Color: col})
+}
+
+func filterLegendItems(items []layout.LegendItem, names option.Strings) []layout.LegendItem {
+	byName := make(map[string]layout.LegendItem, len(items))
+	for _, item := range items {
+		byName[item.Name] = item
+	}
+	out := make([]layout.LegendItem, 0, len(names))
+	for _, name := range names {
+		if item, ok := byName[name]; ok {
+			out = append(out, item)
+		}
+	}
+	return out
 }

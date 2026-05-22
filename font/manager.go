@@ -1,23 +1,24 @@
 // Package font 管理 zcharts 渲染所需的字体资源。
 //
 // 设计目标：
-//   - 内置一个体积小的 fallback 字体（goregular），保证开箱即用；
-//   - 用户可通过 Load/LoadFile 注册自定义字体（如思源黑体），覆盖默认；
+//   - 内置一个中文兼容的 fallback 字体（Source Han Sans SC 子集），保证开箱即用；
+//   - 用户可通过 Load/LoadFile 注册自定义字体，覆盖默认；
 //   - 通过 Face(family, size) 获取 golang.org/x/image/font.Face，供渲染使用。
-//
-// 注意：goregular 仅含 ASCII 字符。若图表中包含中文等非 ASCII，必须由用户注册中文字体。
 package font
 
 import (
+	"bytes"
+	"compress/gzip"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 
+	"github.com/hajimehoshi/chinesegamefonts/scregular"
 	"github.com/zzhtl/zcharts/common/errs"
 
 	"golang.org/x/image/font"
-	"golang.org/x/image/font/gofont/goregular"
 	"golang.org/x/image/font/opentype"
 )
 
@@ -40,11 +41,13 @@ const DefaultFamily = "default"
 
 // New 创建带有内置 fallback 字体的 Manager。
 func New() *Manager {
-	data := append([]byte(nil), goregular.TTF...)
+	data, err := builtinFontData()
+	if err != nil {
+		panic(fmt.Errorf("zcharts/font: load builtin font: %w", err))
+	}
 	f, err := opentype.Parse(data)
 	if err != nil {
-		// goregular.TTF 由 Go 团队维护，几乎不可能解析失败；真发生时直接 panic。
-		panic(fmt.Errorf("zcharts/font: parse goregular: %w", err))
+		panic(fmt.Errorf("zcharts/font: parse builtin font: %w", err))
 	}
 	entry := &Entry{Font: f, Data: data}
 	m := &Manager{
@@ -138,4 +141,26 @@ func (m *Manager) lookup(family string) *Entry {
 		}
 	}
 	return m.fallback
+}
+
+var builtinFontOnce struct {
+	sync.Once
+	data []byte
+	err  error
+}
+
+func builtinFontData() ([]byte, error) {
+	builtinFontOnce.Do(func() {
+		r, err := gzip.NewReader(bytes.NewReader(scregular.CompressedTTF))
+		if err != nil {
+			builtinFontOnce.err = err
+			return
+		}
+		defer r.Close()
+		builtinFontOnce.data, builtinFontOnce.err = io.ReadAll(r)
+	})
+	if builtinFontOnce.err != nil {
+		return nil, builtinFontOnce.err
+	}
+	return append([]byte(nil), builtinFontOnce.data...), nil
 }
