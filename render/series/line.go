@@ -1,0 +1,136 @@
+// Package series 各 series 类型的渲染器实现。
+//
+// 每个 series 渲染函数都是无状态的，由 render 包的 engine 在合适时机调用。
+package series
+
+import (
+	zcanvas "github.com/zzhtl/zcharts/canvas"
+	"github.com/zzhtl/zcharts/common/color"
+	"github.com/zzhtl/zcharts/common/geom"
+	"github.com/zzhtl/zcharts/option"
+	"github.com/zzhtl/zcharts/render/scale"
+)
+
+// DrawLineArgs Line 渲染参数集合。
+type DrawLineArgs struct {
+	Canvas   zcanvas.Canvas
+	Series   *option.LineSeries
+	XScale   scale.Scale
+	YScale   scale.Scale
+	GridRect geom.Rect
+	Color    color.Color // 主色（来自调色板或 series.color）
+	BaseY    float64     // areaStyle 填充时的基准 y（一般是 grid 底边）
+	Family   string      // 默认字体 family
+}
+
+// DrawLine 绘制一条折线 series（包含可选的面积填充和数据点 symbol）。
+func DrawLine(a DrawLineArgs) {
+	c := a.Canvas
+	data := a.Series.Data
+	if len(data) == 0 || a.XScale == nil || a.YScale == nil {
+		return
+	}
+
+	// 计算每个点的像素位置
+	points := make([]geom.Point, 0, len(data))
+	for i, d := range data {
+		x := a.XScale.Pixel(float64(i))
+		y := a.YScale.Pixel(d.Number())
+		points = append(points, geom.Point{X: x, Y: y})
+	}
+
+	// 面积填充
+	if a.Series.AreaStyle != nil {
+		areaColor := a.Color.WithAlpha(96) // 默认半透明
+		if a.Series.AreaStyle.Color != "" {
+			if cc, err := color.Parse(string(a.Series.AreaStyle.Color)); err == nil {
+				areaColor = cc
+				if a.Series.AreaStyle.Opacity != nil {
+					areaColor.A = uint8(*a.Series.AreaStyle.Opacity * 255)
+				}
+			}
+		}
+		c.SetFill(areaColor)
+		c.NoStroke()
+		c.MoveTo(points[0].X, a.BaseY)
+		c.LineTo(points[0].X, points[0].Y)
+		if a.Series.Smooth {
+			drawSmoothPath(c, points)
+		} else {
+			for _, p := range points[1:] {
+				c.LineTo(p.X, p.Y)
+			}
+		}
+		c.LineTo(points[len(points)-1].X, a.BaseY)
+		c.ClosePath()
+		c.Fill()
+	}
+
+	// 折线
+	lineColor := a.Color
+	if a.Series.LineStyle.Color != "" {
+		if cc, err := color.Parse(string(a.Series.LineStyle.Color)); err == nil {
+			lineColor = cc
+		}
+	}
+	lineWidth := a.Series.LineStyle.Width
+	if lineWidth <= 0 {
+		lineWidth = 2
+	}
+	c.SetStroke(lineColor)
+	c.SetStrokeWidth(lineWidth)
+	c.SetLineCap(zcanvas.CapRound)
+	c.NoFill()
+	c.MoveTo(points[0].X, points[0].Y)
+	if a.Series.Smooth {
+		drawSmoothPath(c, points)
+	} else {
+		for _, p := range points[1:] {
+			c.LineTo(p.X, p.Y)
+		}
+	}
+	c.Stroke()
+
+	// 数据点 symbol
+	showSymbol := true
+	if a.Series.ShowSymbol != nil {
+		showSymbol = *a.Series.ShowSymbol
+	}
+	if showSymbol && a.Series.Symbol != "none" {
+		size := a.Series.SymbolSize
+		if size <= 0 {
+			size = 6
+		}
+		for _, p := range points {
+			c.SetFill(color.RGB(255, 255, 255))
+			c.SetStroke(lineColor)
+			c.SetStrokeWidth(2)
+			c.DrawCircle(p.X, p.Y, size/2)
+		}
+	}
+}
+
+// drawSmoothPath 用 Catmull-Rom → Cubic Bezier 转换，绘制平滑曲线（pts[0] 已 MoveTo）。
+func drawSmoothPath(c zcanvas.Canvas, pts []geom.Point) {
+	n := len(pts)
+	if n < 2 {
+		return
+	}
+	if n == 2 {
+		c.LineTo(pts[1].X, pts[1].Y)
+		return
+	}
+	for i := 0; i < n-1; i++ {
+		p0 := pts[max(i-1, 0)]
+		p1 := pts[i]
+		p2 := pts[i+1]
+		p3 := pts[min(i+2, n-1)]
+
+		const tension = 0.2
+		c1x := p1.X + (p2.X-p0.X)*tension
+		c1y := p1.Y + (p2.Y-p0.Y)*tension
+		c2x := p2.X - (p3.X-p1.X)*tension
+		c2y := p2.Y - (p3.Y-p1.Y)*tension
+		c.CubicTo(c1x, c1y, c2x, c2y, p2.X, p2.Y)
+	}
+}
