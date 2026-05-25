@@ -74,6 +74,56 @@ func TestParseBarMixed(t *testing.T) {
 	}
 }
 
+func TestParseAdditionalSeriesTypes(t *testing.T) {
+	src := `{
+		"series":[
+			{"type":"funnel","data":[{"name":"A","value":10}]},
+			{"type":"wordCloud","sizeRange":[12,48],"data":[{"name":"稳定","value":30}]},
+			{"type":"timeline","data":[{"time":"2026-05-01","title":"启动","content":"项目启动"}]},
+			{"type":"metricCard","coordinateSystem":"none","data":[{"name":"KPI","value":1}]}
+		]
+	}`
+	opt, err := ParseString(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := opt.Series[0].(*option.FunnelSeries); !ok {
+		t.Fatalf("series[0]=%T", opt.Series[0])
+	}
+	if wc, ok := opt.Series[1].(*option.WordCloudSeries); !ok || len(wc.SizeRange) != 2 {
+		t.Fatalf("series[1]=%T", opt.Series[1])
+	}
+	timeline, ok := opt.Series[2].(*option.TimelineSeries)
+	if !ok || len(timeline.Data) != 1 || timeline.Data[0].Title != "启动" {
+		t.Fatalf("series[2]=%T data=%+v", opt.Series[2], timeline)
+	}
+	custom, ok := opt.Series[3].(*option.CustomSeries)
+	if !ok {
+		t.Fatalf("series[3]=%T", opt.Series[3])
+	}
+	if custom.Kind() != "metricCard" || len(custom.Raw) == 0 {
+		t.Fatalf("custom=%+v raw=%s", custom, string(custom.Raw))
+	}
+}
+
+func TestParseTimePair(t *testing.T) {
+	src := `{
+		"xAxis":{"type":"time"},
+		"series":[{"type":"line","data":[["2026-05-01",120],["2026-05-02",140]]}]
+	}`
+	opt, err := ParseString(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := opt.Series[0].(*option.LineSeries)
+	if len(line.Data[0].Values) != 2 {
+		t.Fatalf("values=%v", line.Data[0].Values)
+	}
+	if line.Data[0].Values[0] <= 0 || line.Data[0].Values[1] != 120 {
+		t.Fatalf("values=%v", line.Data[0].Values)
+	}
+}
+
 func TestParseScatterPair(t *testing.T) {
 	src := `{"series":[{"type":"scatter","data":[[1,2],[3,4],[5,6]]}]}`
 	opt, err := ParseString(src)
