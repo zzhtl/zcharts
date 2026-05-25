@@ -71,16 +71,29 @@ func DrawPie(a DrawPieArgs) {
 		a.Canvas.SetStrokeWidth(2)
 		a.Canvas.DrawSector(cx, cy, rIn, segOut, startAngle, startAngle+angle)
 
-		// label（默认 outside）
+		// label（默认 outside，带引导线）
 		if a.Series.Label.Show {
 			midAngle := startAngle + angle/2
-			lx := cx + math.Cos(midAngle*math.Pi/180)*(segOut+12)
-			ly := cy + math.Sin(midAngle*math.Pi/180)*(segOut+12)
+			rad := midAngle * math.Pi / 180
+			cosA, sinA := math.Cos(rad), math.Sin(rad)
+			// 引导线：弧边 → 拐点 → 水平延伸
+			ex, ey := cx+cosA*segOut, cy+sinA*segOut                   // 弧边起点
+			elbowX, elbowY := cx+cosA*(segOut+14), cy+sinA*(segOut+14) // 拐点
+			dir := 1.0
+			if cosA < 0 {
+				dir = -1.0
+			}
+			endX := elbowX + dir*18
+
 			label := d.Name
 			if a.Series.Label.Formatter != "" {
 				label = formatLabel(a.Series.Label.Formatter, d, v, v/total)
 			} else if label == "" {
 				label = number.FormatAuto(v)
+			}
+			if label == "" {
+				startAngle += angle
+				continue
 			}
 			labelColor := color.MustParse("#333")
 			if a.Series.Label.Color != "" {
@@ -92,17 +105,59 @@ func DrawPie(a DrawPieArgs) {
 			if size <= 0 {
 				size = 12
 			}
-			a.Canvas.DrawText(lx, ly, label, zcanvas.TextStyle{
+			anchor := zcanvas.AnchorStart
+			if dir < 0 {
+				anchor = zcanvas.AnchorEnd
+			}
+			textStyle := zcanvas.TextStyle{
 				Family: a.Family,
 				Size:   size,
 				Color:  labelColor,
-				Anchor: anchorForAngle(midAngle),
+				Anchor: anchor,
 				VAlign: zcanvas.AlignMiddle,
-			})
+			}
+			labelW, labelH, _ := a.Canvas.MeasureText(label, textStyle)
+			textX := endX + dir*3
+			textY := clampFloat(elbowY, a.Bounds.Y+labelH/2+4, a.Bounds.Bottom()-labelH/2-4)
+			if dir > 0 {
+				minX := a.Bounds.X + 4
+				maxX := a.Bounds.Right() - labelW - 4
+				textX = clampFloat(textX, minX, maxX)
+				endX = textX - 3
+			} else {
+				minX := a.Bounds.X + labelW + 4
+				maxX := a.Bounds.Right() - 4
+				textX = clampFloat(textX, minX, maxX)
+				endX = textX + 3
+			}
+
+			a.Canvas.SetStroke(c)
+			a.Canvas.SetStrokeWidth(1)
+			a.Canvas.NoFill()
+			a.Canvas.BeginPath()
+			a.Canvas.MoveTo(ex, ey)
+			a.Canvas.LineTo(elbowX, elbowY)
+			a.Canvas.LineTo(endX, textY)
+			a.Canvas.Stroke()
+
+			a.Canvas.DrawText(textX, textY, label, textStyle)
 		}
 
 		startAngle += angle
 	}
+}
+
+func clampFloat(v, minV, maxV float64) float64 {
+	if maxV < minV {
+		return minV
+	}
+	if v < minV {
+		return minV
+	}
+	if v > maxV {
+		return maxV
+	}
+	return v
 }
 
 func pieCenter(b geom.Rect, center option.FlexList) (float64, float64) {

@@ -22,6 +22,11 @@ func ComputeGridRect(bounds geom.Rect, grid *option.Grid, hasTitle bool) geom.Re
 		top = 30
 	}
 	left, right, bottom := defaultLeftMargin, defaultRightMargin, defaultBottomMargin
+	// 小画布自适应：默认 margin 不应吃掉过多绘图区，否则小尺寸图表坐标轴会挤成一团。
+	left = clampMargin(left, bounds.W, 0.34)
+	right = clampMargin(right, bounds.W, 0.18)
+	top = clampMargin(top, bounds.H, 0.40)
+	bottom = clampMargin(bottom, bounds.H, 0.34)
 	if grid != nil {
 		if grid.Left.Set {
 			left = int(grid.Left.Resolve(bounds.W, float64(left)))
@@ -37,9 +42,17 @@ func ComputeGridRect(bounds geom.Rect, grid *option.Grid, hasTitle bool) geom.Re
 		}
 	}
 	r := bounds.Inset(float64(top), float64(right), float64(bottom), float64(left))
-	if r.W < 50 || r.H < 50 {
+	if r.W < 30 || r.H < 30 {
 		// 退化保护：避免负数尺寸
-		r = bounds.InsetUniform(20)
+		r = bounds.InsetUniform(12)
 	}
 	return r
+}
+
+// clampMargin 把默认 margin 限制在画布尺寸的 frac 比例内，保证小画布仍有足够绘图区。
+func clampMargin(m int, extent, frac float64) int {
+	if max := int(extent * frac); m > max {
+		return max
+	}
+	return m
 }

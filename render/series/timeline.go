@@ -138,9 +138,8 @@ func drawTimelineEventText(a DrawTimelineArgs, event option.TimelineEvent, y, ro
 		VAlign: zcanvas.AlignMiddle,
 	}
 	if event.Time != "" {
-		// 补偿文字基线偏移，让时间文字的视觉中心与圆点中心平行。
-		_, _, ascent := a.Canvas.MeasureText(event.Time, timeStyle)
-		a.Canvas.DrawText(lineX-22, y+ascent, event.Time, timeStyle)
+		// AlignMiddle 已让文字垂直居中于 y，与圆点中心同一水平线。
+		a.Canvas.DrawText(lineX-22, y, event.Time, timeStyle)
 	}
 
 	title := firstTimelineText(event.Title, event.Name, event.Content)

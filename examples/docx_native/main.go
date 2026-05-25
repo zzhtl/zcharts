@@ -46,6 +46,24 @@ const stackedBarJSON = `{
   ]
 }`
 
+const areaJSON = `{
+  "title": {"text": "流量面积图"},
+  "legend": {},
+  "xAxis": {"type": "category", "data": ["Mon","Tue","Wed","Thu","Fri"]},
+  "yAxis": {"type": "value"},
+  "series": [
+    {"name": "PV", "type": "line", "areaStyle": {}, "stack": "t", "data": [120, 150, 130, 180, 160]},
+    {"name": "UV", "type": "line", "areaStyle": {}, "stack": "t", "data": [60, 72, 68, 90, 84]}
+  ]
+}`
+
+const horizontalBarJSON = `{
+  "title": {"text": "区域销量（横向条形）"},
+  "xAxis": {"type": "value"},
+  "yAxis": {"type": "category", "data": ["华东","华北","华南","西南"]},
+  "series": [{"name": "销量", "type": "bar", "data": [120, 90, 60, 45]}]
+}`
+
 const scatterJSON = `{
   "title": {"text": "转化关系"},
   "xAxis": {"type": "value"},
@@ -154,6 +172,14 @@ func main() {
 	}
 	doc.AddParagraph("堆积柱状图（Word 原生堆积柱）：")
 	if err := addNativeChart(doc, stackedBarJSON, 640, 420); err != nil {
+		log.Fatal(err)
+	}
+	doc.AddParagraph("堆积面积图（Word 原生面积图）：")
+	if err := addNativeChart(doc, areaJSON, 640, 420); err != nil {
+		log.Fatal(err)
+	}
+	doc.AddParagraph("横向条形图（Word 原生横向柱）：")
+	if err := addNativeChart(doc, horizontalBarJSON, 640, 360); err != nil {
 		log.Fatal(err)
 	}
 	doc.AddParagraph("渠道占比（Word 原生环图）：")

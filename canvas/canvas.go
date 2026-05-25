@@ -54,6 +54,12 @@ type TextStyle struct {
 	Rotation float64 // 顺时针角度，0 为水平
 }
 
+// GradientStop 是线性渐变的一个颜色停靠点，Offset 取 [0,1]。
+type GradientStop struct {
+	Offset float64
+	Color  color.Color
+}
+
 // LineCap 描述线端样式。
 type LineCap uint8
 
@@ -76,6 +82,9 @@ type Canvas interface {
 	SetLineCap(cap LineCap)
 	NoFill()
 	NoStroke()
+	// SetFillLinearGradient 把后续填充设为从 (x0,y0) 到 (x1,y1) 的线性渐变。
+	// stops 的 Offset 取 [0,1]，至少需要两个停靠点。下一次 SetFill 会恢复为纯色填充。
+	SetFillLinearGradient(x0, y0, x1, y1 float64, stops []GradientStop)
 
 	// 状态栈
 	Save()
@@ -99,6 +108,8 @@ type Canvas interface {
 
 	// 高阶图元
 	DrawRect(x, y, w, h float64)
+	// DrawRoundedRect 绘制四角半径为 r 的圆角矩形。
+	DrawRoundedRect(x, y, w, h, r float64)
 	DrawCircle(cx, cy, r float64)
 	DrawLine(x1, y1, x2, y2 float64)
 	// DrawSector 绘制以 (cx,cy) 为中心、内径 rIn、外径 rOut，角度区间

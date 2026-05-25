@@ -46,8 +46,10 @@ func DrawFunnel(a DrawFunnelArgs) {
 	}
 
 	widths := make([]float64, n)
+	total := 0.0
 	for i, d := range items {
 		widths[i] = funnelWidth(rect.W, d.Number(), minValue, maxValue)
+		total += math.Max(0, d.Number())
 	}
 
 	for i, d := range items {
@@ -61,30 +63,75 @@ func DrawFunnel(a DrawFunnelArgs) {
 		fill := a.Palette.At(i)
 		drawFunnelSegment(a.Canvas, rect.CenterX(), y0, y1, topW, bottomW, fill)
 
-		label := d.Name
-		if a.Series.Label.Formatter != "" {
-			label = formatLabel(a.Series.Label.Formatter, d, d.Number(), 0)
-		} else if label == "" {
-			label = number.FormatAuto(d.Number())
+		// 百分比（基于各段值占总和的比例）。
+		pct := 0.0
+		if total > 0 {
+			pct = math.Max(0, d.Number()) / total
 		}
-		if label != "" && (a.Series.Label.Show || a.Series.Label.Formatter != "") {
+		var label string
+		if a.Series.Label.Formatter != "" {
+			label = formatLabel(a.Series.Label.Formatter, d, d.Number(), pct)
+		} else {
+			// 默认显示：名称:数量(百分比%)（漏斗标签默认显示，与 Word 漏斗一致）。
+			valueText := number.FormatAuto(d.Number())
+			pctText := number.FormatFloat(pct*100, 1) + "%"
+			if d.Name == "" {
+				label = valueText + "(" + pctText + ")"
+			} else {
+				label = d.Name + ":" + valueText + "(" + pctText + ")"
+			}
+		}
+		if label != "" {
 			size := a.Series.Label.FontSize
 			if size <= 0 {
 				size = 13
 			}
-			textColor := contrastText(fill)
+			customColor, hasCustom := color.Color{}, false
 			if a.Series.Label.Color != "" {
 				if c, err := color.Parse(string(a.Series.Label.Color)); err == nil {
-					textColor = c
+					customColor, hasCustom = c, true
 				}
 			}
-			a.Canvas.DrawText(rect.CenterX(), (y0+y1)/2, label, zcanvas.TextStyle{
-				Family: a.Family,
-				Size:   size,
-				Color:  textColor,
-				Anchor: zcanvas.AnchorMiddle,
-				VAlign: zcanvas.AlignMiddle,
-			})
+
+			midY := (y0 + y1) / 2
+			midW := (topW + bottomW) / 2 // 标签所在高度（段中线）处的梯形宽度
+			measure := zcanvas.TextStyle{Family: a.Family, Size: size}
+			tw, _, _ := a.Canvas.MeasureText(label, measure)
+
+			if tw <= midW-12 {
+				// 段内放得下：居中，按底色选对比文字色。
+				textColor := contrastText(fill)
+				if hasCustom {
+					textColor = customColor
+				}
+				a.Canvas.DrawText(rect.CenterX(), midY, label, zcanvas.TextStyle{
+					Family: a.Family, Size: size, Color: textColor,
+					Anchor: zcanvas.AnchorMiddle, VAlign: zcanvas.AlignMiddle,
+				})
+			} else {
+				// 段内放不下：移到该段右侧外部并加引导线，保证完整显示。
+				edgeX := rect.CenterX() + midW/2
+				lx := edgeX + 8
+				textColor := color.MustParse("#333")
+				if hasCustom {
+					textColor = customColor
+				}
+				a.Canvas.SetStroke(fill)
+				a.Canvas.SetStrokeWidth(1)
+				a.Canvas.NoFill()
+				a.Canvas.DrawLine(edgeX, midY, lx-2, midY)
+
+				anchor := zcanvas.AnchorStart
+				if lx+tw > a.Bounds.Right()-4 {
+					// 超出画布右缘：改为贴右对齐，避免被截断。
+					anchor = zcanvas.AnchorEnd
+					lx = a.Bounds.Right() - 4
+				}
+				a.Canvas.DrawText(lx, midY, label, zcanvas.TextStyle{
+					Family: a.Family, Size: size, Color: textColor,
+					Anchor: anchor, VAlign: zcanvas.AlignMiddle,
+				})
+			}
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	zcanvas "github.com/zzhtl/zcharts/canvas"
 	"github.com/zzhtl/zcharts/common/color"
 	"github.com/zzhtl/zcharts/common/geom"
+	"github.com/zzhtl/zcharts/common/number"
 	"github.com/zzhtl/zcharts/option"
 	"github.com/zzhtl/zcharts/render/scale"
 )
@@ -41,9 +42,9 @@ func DrawLine(a DrawLineArgs) {
 		points = append(points, geom.Point{X: x, Y: y})
 	}
 
-	// 面积填充
+	// 面积填充（默认用从线到基线的竖直渐变，更有层次）
 	if a.Series.AreaStyle != nil {
-		areaColor := a.Color.WithAlpha(96) // 默认半透明
+		areaColor := a.Color.WithAlpha(150)
 		if a.Series.AreaStyle.Color != "" {
 			if cc, err := color.Parse(string(a.Series.AreaStyle.Color)); err == nil {
 				areaColor = cc
@@ -52,7 +53,16 @@ func DrawLine(a DrawLineArgs) {
 				}
 			}
 		}
-		c.SetFill(areaColor)
+		topY := points[0].Y
+		for _, p := range points {
+			if p.Y < topY {
+				topY = p.Y
+			}
+		}
+		c.SetFillLinearGradient(0, topY, 0, a.BaseY, []zcanvas.GradientStop{
+			{Offset: 0, Color: areaColor},
+			{Offset: 1, Color: areaColor.WithAlpha(areaColor.A / 6)},
+		})
 		c.NoStroke()
 		c.MoveTo(points[0].X, a.BaseY)
 		c.LineTo(points[0].X, points[0].Y)
@@ -82,6 +92,13 @@ func DrawLine(a DrawLineArgs) {
 	c.SetStroke(lineColor)
 	c.SetStrokeWidth(lineWidth)
 	c.SetLineCap(zcanvas.CapRound)
+	// 线型：dashed / dotted（虚线/点线），其余为实线。
+	switch a.Series.LineStyle.Type {
+	case "dashed":
+		c.SetDash(0, []float64{lineWidth * 4, lineWidth * 3})
+	case "dotted":
+		c.SetDash(0, []float64{lineWidth, lineWidth * 2})
+	}
 	c.NoFill()
 	c.MoveTo(points[0].X, points[0].Y)
 	if a.Series.Smooth {
@@ -92,6 +109,7 @@ func DrawLine(a DrawLineArgs) {
 		}
 	}
 	c.Stroke()
+	c.SetDash(0, nil) // 复位虚线，避免影响后续绘制
 
 	// 数据点 symbol
 	showSymbol := true
@@ -108,6 +126,18 @@ func DrawLine(a DrawLineArgs) {
 			c.SetStroke(lineColor)
 			c.SetStrokeWidth(2)
 			c.DrawCircle(p.X, p.Y, size/2)
+		}
+	}
+
+	// 数据标签
+	if a.Series.Label.Show {
+		for i, p := range points {
+			_, yVal := linePointValue(data[i], i, a.UseDataX)
+			text := number.FormatAuto(yVal)
+			if a.Series.Label.Formatter != "" {
+				text = formatLabel(a.Series.Label.Formatter, data[i], yVal, 0)
+			}
+			drawDataLabel(c, a.Series.Label, a.Family, text, p.X, p.Y-8, zcanvas.AnchorMiddle, zcanvas.AlignBottom)
 		}
 	}
 }

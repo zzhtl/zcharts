@@ -41,3 +41,31 @@ func TestSmokeRender(t *testing.T) {
 		})
 	}
 }
+
+func TestRoundedRectAndGradient(t *testing.T) {
+	for _, f := range []Format{FormatPNG, FormatSVG, FormatPDF} {
+		t.Run(string(f), func(t *testing.T) {
+			c := New(200, 120, nil)
+
+			// 渐变填充 + 圆角矩形
+			c.SetFillLinearGradient(20, 20, 20, 100, []GradientStop{
+				{Offset: 0, Color: color.MustParse("#91cc75")},
+				{Offset: 1, Color: color.MustParse("#5470c6")},
+			})
+			c.NoStroke()
+			c.DrawRoundedRect(20, 20, 80, 80, 10)
+
+			// 半径为 0 时退化为普通矩形
+			c.SetFill(color.MustParse("#fac858"))
+			c.DrawRoundedRect(120, 20, 60, 60, 0)
+
+			var buf bytes.Buffer
+			if err := c.Write(&buf, f); err != nil {
+				t.Fatalf("write %s: %v", f, err)
+			}
+			if buf.Len() == 0 {
+				t.Fatalf("%s: empty output", f)
+			}
+		})
+	}
+}

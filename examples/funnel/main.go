@@ -18,7 +18,7 @@ const optionJSON = `{
     "width": "70%",
     "height": "76%",
     "gap": 6,
-    "label": {"show": true, "formatter": "{b}  {c}", "fontSize": 13},
+    "label": {"show": true, "fontSize": 13},
     "data": [
       {"name": "访问", "value": 1000},
       {"name": "注册", "value": 760},

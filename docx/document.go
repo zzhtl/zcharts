@@ -137,6 +137,17 @@ func AsNativeChart(size ...int) ChartInsertOption {
 // AddChart 在文档末尾插入一个图表。
 // 默认以 PNG 图片嵌入；ChartInsertOption.native=true 时优先生成 Word 原生 chart XML。
 func (d *Document) AddChart(opt *option.Option, ins ChartInsertOption, renderOpts ...chart.RenderOption) error {
+	el, err := d.buildChartElement(opt, ins, renderOpts...)
+	if err != nil {
+		return err
+	}
+	d.body = append(d.body, el)
+	return nil
+}
+
+// buildChartElement 渲染并注册一个图表，返回对应的 body 元素（不追加到文档），
+// 供 AddChart 与表格单元格嵌图共用。媒体（图片/chart XML）在此完成注册。
+func (d *Document) buildChartElement(opt *option.Option, ins ChartInsertOption, renderOpts ...chart.RenderOption) (bodyElement, error) {
 	if ins.Width <= 0 {
 		ins.Width = 600
 	}
@@ -144,12 +155,12 @@ func (d *Document) AddChart(opt *option.Option, ins ChartInsertOption, renderOpt
 		ins.Height = 400
 	}
 	if ins.native {
-		return d.addNativeChart(opt, ins, renderOpts...)
+		return d.buildNativeElement(opt, ins, renderOpts...)
 	}
-	return d.addImageChart(opt, ins, renderOpts...)
+	return d.buildImageElement(opt, ins, renderOpts...)
 }
 
-func (d *Document) addImageChart(opt *option.Option, ins ChartInsertOption, renderOpts ...chart.RenderOption) error {
+func (d *Document) buildImageElement(opt *option.Option, ins ChartInsertOption, renderOpts ...chart.RenderOption) (bodyElement, error) {
 	format := canvas.FormatPNG
 	mime, ext := "image/png", "png"
 	switch ins.Format {
@@ -158,7 +169,7 @@ func (d *Document) addImageChart(opt *option.Option, ins ChartInsertOption, rend
 	case "", PNG:
 		// 默认 png
 	default:
-		return fmt.Errorf("docx: unsupported image format %q", ins.Format)
+		return nil, fmt.Errorf("docx: unsupported image format %q", ins.Format)
 	}
 	if format == canvas.FormatSVG {
 		// Word 对 SVG 的支持依赖版本（Office 2019+ 支持 a:svgBlip 扩展）。
@@ -171,7 +182,7 @@ func (d *Document) addImageChart(opt *option.Option, ins ChartInsertOption, rend
 	var buf bytes.Buffer
 	allOpts := append([]chart.RenderOption{chart.WithSize(float64(ins.Width), float64(ins.Height))}, renderOpts...)
 	if err := chart.Render(opt, format, &buf, allOpts...); err != nil {
-		return fmt.Errorf("docx: render chart: %w", err)
+		return nil, fmt.Errorf("docx: render chart: %w", err)
 	}
 
 	// 注册图片
@@ -187,32 +198,30 @@ func (d *Document) addImageChart(opt *option.Option, ins ChartInsertOption, rend
 
 	// 转 EMU：1 px = 9525 EMU（96 DPI 标准）
 	const emuPerPx = 9525
-	d.body = append(d.body, chartImage{
+	return chartImage{
 		rid:       rid,
 		widthEMU:  int64(ins.Width) * emuPerPx,
 		heightEMU: int64(ins.Height) * emuPerPx,
 		docPrID:   d.nextDrawingID(),
-	})
-	return nil
+	}, nil
 }
 
-func (d *Document) addNativeChart(opt *option.Option, ins ChartInsertOption, renderOpts ...chart.RenderOption) error {
+func (d *Document) buildNativeElement(opt *option.Option, ins ChartInsertOption, renderOpts ...chart.RenderOption) (bodyElement, error) {
 	data, err := nativechart.BuildChartXML(opt)
 	if err != nil {
 		if errors.Is(err, errs.ErrUnsupportedSeries) || errors.Is(err, errs.ErrNotImplemented) {
 			body, shapeErr := nativechart.BuildShapeXML(opt, ins.Width, ins.Height)
 			if shapeErr == nil {
-				d.body = append(d.body, chartShape{body: body})
-				return nil
+				return chartShape{body: body}, nil
 			}
 			if !errors.Is(shapeErr, errs.ErrUnsupportedSeries) && !errors.Is(shapeErr, errs.ErrNotImplemented) {
-				return fmt.Errorf("docx: build native shape: %w", shapeErr)
+				return nil, fmt.Errorf("docx: build native shape: %w", shapeErr)
 			}
 			ins.native = false
 			ins.Format = PNG
-			return d.addImageChart(opt, ins, renderOpts...)
+			return d.buildImageElement(opt, ins, renderOpts...)
 		}
-		return fmt.Errorf("docx: build native chart: %w", err)
+		return nil, fmt.Errorf("docx: build native chart: %w", err)
 	}
 
 	idx := len(d.charts) + 1
@@ -224,13 +233,12 @@ func (d *Document) addNativeChart(opt *option.Option, ins ChartInsertOption, ren
 	})
 
 	const emuPerPx = 9525
-	d.body = append(d.body, chartNative{
+	return chartNative{
 		rid:       rid,
 		widthEMU:  int64(ins.Width) * emuPerPx,
 		heightEMU: int64(ins.Height) * emuPerPx,
 		docPrID:   d.nextDrawingID(),
-	})
-	return nil
+	}, nil
 }
 
 func (d *Document) nextDrawingID() int {
@@ -275,6 +283,9 @@ func (d *Document) Write(w io.Writer) error {
 			Target: "charts/" + ch.filename,
 		})
 	}
+	// styles.xml / numbering.xml 关系（标题样式、列表编号所需）。
+	docRels.Add(ooxml.Relationship{ID: "rIdStyles", Type: ooxml.RelStyles, Target: "styles.xml"})
+	docRels.Add(ooxml.Relationship{ID: "rIdNumbering", Type: ooxml.RelNumbering, Target: "numbering.xml"})
 	pkg.AddPart(ooxml.Part{
 		Name: "word/_rels/document.xml.rels",
 		Data: docRels.XML(),
@@ -297,6 +308,18 @@ func (d *Document) Write(w io.Writer) error {
 	for ext, mime := range imageExtensions {
 		pkg.AddDefault(ext, mime)
 	}
+
+	// styles.xml / numbering.xml
+	pkg.AddPart(ooxml.Part{
+		Name:        "word/styles.xml",
+		ContentType: stylesContentType,
+		Data:        stylesXML(),
+	})
+	pkg.AddPart(ooxml.Part{
+		Name:        "word/numbering.xml",
+		ContentType: numberingContentType,
+		Data:        numberingXML(),
+	})
 
 	// document.xml
 	pkg.AddPart(ooxml.Part{

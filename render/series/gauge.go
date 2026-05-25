@@ -41,6 +41,23 @@ func DrawGauge(a DrawGaugeArgs) {
 		endAngle = *a.Series.EndAngle
 	}
 
+	val := a.Series.Data[0].Number()
+	frac := (val - min) / (max - min)
+	if frac < 0 {
+		frac = 0
+	} else if frac > 1 {
+		frac = 1
+	}
+
+	label := number.FormatAuto(val)
+	if a.Series.Label.Formatter != "" {
+		label = formatLabel(a.Series.Label.Formatter, a.Series.Data[0], val, frac)
+	}
+	name := a.Series.Data[0].Name
+	if name == "" {
+		name = a.Series.Name
+	}
+
 	cx, cy := pieCenter(a.Bounds, a.Series.Center)
 	ref := math.Min(a.Bounds.W, a.Bounds.H) / 2
 	maxR := ref * 0.7
@@ -51,15 +68,42 @@ func DrawGauge(a DrawGaugeArgs) {
 			maxR = a.Series.Radius.Value
 		}
 	}
-	thickness := maxR * 0.12
-
-	val := a.Series.Data[0].Number()
-	frac := (val - min) / (max - min)
-	if frac < 0 {
-		frac = 0
-	} else if frac > 1 {
-		frac = 1
+	valueSize := 24.0
+	nameSize := 12.0
+	labelBlockH := valueSize + 4
+	if name != "" {
+		labelBlockH += nameSize + 4
 	}
+	labelTop := a.Bounds.Bottom() - labelBlockH - 6
+	if labelTop < a.Bounds.Y+32 {
+		labelTop = a.Bounds.Bottom() - labelBlockH
+	}
+	if len(a.Series.Center) < 2 || !a.Series.Center[1].Set {
+		plotBottom := labelTop - 8
+		if plotBottom > a.Bounds.Y+24 {
+			cy = a.Bounds.Y + (plotBottom-a.Bounds.Y)*0.58
+		}
+	}
+	spaceBelow := (labelTop - cy - 8) / 0.72
+	if spaceBelow > 0 && maxR > spaceBelow {
+		maxR = spaceBelow
+	}
+	spaceAbove := cy - a.Bounds.Y - 4
+	if spaceAbove > 0 && maxR > spaceAbove {
+		maxR = spaceAbove
+	}
+	spaceLeft := cx - a.Bounds.X - 4
+	spaceRight := a.Bounds.Right() - cx - 4
+	if spaceLeft > 0 && maxR > spaceLeft {
+		maxR = spaceLeft
+	}
+	if spaceRight > 0 && maxR > spaceRight {
+		maxR = spaceRight
+	}
+	if maxR < 24 {
+		maxR = 24
+	}
+	thickness := math.Max(maxR*0.12, 4)
 	// ECharts 仪表盘的角度通常表示数学坐标系（CCW、X 轴正向 0°）
 	// 我们的 DrawSector 在屏幕坐标系下顺时针（与 SVG 一致），把 ECharts 角度转换：
 	// screenAngle = -echartsAngle（X 轴方向不变，Y 翻转）
@@ -99,25 +143,20 @@ func DrawGauge(a DrawGaugeArgs) {
 	a.Canvas.NoStroke()
 	a.Canvas.DrawCircle(cx, cy, 6)
 
-	// 数字
-	label := number.FormatAuto(val)
-	if a.Series.Label.Formatter != "" {
-		label = formatLabel(a.Series.Label.Formatter, a.Series.Data[0], val, frac)
-	}
-	a.Canvas.DrawText(cx, cy+thickness*2, label, zcanvas.TextStyle{
+	// 数字和名称固定放在表盘下方，避免覆盖指针和圆点。
+	a.Canvas.DrawText(cx, labelTop, label, zcanvas.TextStyle{
 		Family: a.Family,
-		Size:   24,
+		Size:   valueSize,
 		Weight: "bold",
 		Color:  a.TextColor,
 		Anchor: zcanvas.AnchorMiddle,
 		VAlign: zcanvas.AlignTop,
 	})
 
-	// 名称（如果有）
-	if name := a.Series.Data[0].Name; name != "" {
-		a.Canvas.DrawText(cx, cy+thickness*2+30, name, zcanvas.TextStyle{
+	if name != "" {
+		a.Canvas.DrawText(cx, labelTop+valueSize+6, name, zcanvas.TextStyle{
 			Family: a.Family,
-			Size:   12,
+			Size:   nameSize,
 			Color:  a.TextColor,
 			Anchor: zcanvas.AnchorMiddle,
 			VAlign: zcanvas.AlignTop,

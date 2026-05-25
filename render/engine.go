@@ -62,9 +62,14 @@ func RenderWithOptions(c canvas.Canvas, opt *option.Option, th *theme.Theme, opt
 		}
 	}
 
+	// 先测量图例占位，供各绘图区预留空间，避免图例与图表内容重叠。
+	ctx.LegendItems = collectLegendItems(ctx)
+	ctx.Legend = layout.MeasureLegend(c, ctx.Bounds, ctx.LegendItems, opt.Legend, th, titleHeight(ctx))
+
 	if hasCartesian {
 		hasTitle := opt.Title != nil && (opt.Title.Text != "" || opt.Title.Subtext != "")
 		ctx.GridRect = layout.ComputeGridRect(ctx.Bounds, opt.Grid, hasTitle)
+		ctx.GridRect = reserveLegend(ctx.GridRect, ctx.Legend)
 		buildCartesianScales(ctx)
 		drawCartesianAxes(ctx)
 		drawCartesianSeries(ctx)
@@ -413,6 +418,7 @@ func drawCartesianSeries(ctx *Context) {
 				YScale:         ys,
 				GridRect:       ctx.GridRect,
 				Color:          ctx.SeriesColor(i),
+				Family:         ctx.Theme.TextStyle.FontFamily,
 				SeriesIndex:    info.GroupIndex,
 				TotalBarSeries: info.TotalGroups,
 				BandWidth:      bandWidth,
@@ -431,6 +437,7 @@ func drawCartesianSeries(ctx *Context) {
 				YScale:   ys,
 				GridRect: ctx.GridRect,
 				Color:    ctx.SeriesColor(i),
+				Family:   ctx.Theme.TextStyle.FontFamily,
 			})
 		case *option.HeatmapSeries:
 			xs := ctx.XScale(v.XAxisIndex)
@@ -528,12 +535,7 @@ func barStackKey(s *option.BarSeries) string {
 func drawPolarSeries(ctx *Context) {
 	// 为多个 Pie/Radar/Gauge 共用画布时，按 series 顺序绘制（后绘制覆盖先绘制）
 	// 第一阶段不做多图分屏布局。
-	hasTitle := ctx.Option.Title != nil && (ctx.Option.Title.Text != "" || ctx.Option.Title.Subtext != "")
-	innerBounds := ctx.Bounds
-	if hasTitle {
-		// 给标题留 60px 顶部
-		innerBounds = innerBounds.Inset(60, 0, 0, 0)
-	}
+	innerBounds := contentBounds(ctx)
 
 	for i, s := range ctx.Option.Series {
 		switch v := s.(type) {
@@ -608,11 +610,63 @@ func drawFreeSeries(ctx *Context) {
 }
 
 func contentBounds(ctx *Context) geom.Rect {
+	inner := ctx.Bounds
 	hasTitle := ctx.Option.Title != nil && (ctx.Option.Title.Text != "" || ctx.Option.Title.Subtext != "")
 	if hasTitle {
-		return ctx.Bounds.Inset(60, 0, 0, 0)
+		inner = inner.Inset(titleHeight(ctx), 0, 0, 0)
 	}
-	return ctx.Bounds
+	return reserveLegend(inner, ctx.Legend)
+}
+
+// titleHeight 估算标题（含副标题）占据的顶部高度。无标题时返回一个小的基础留白。
+func titleHeight(ctx *Context) float64 {
+	t := ctx.Option.Title
+	if t == nil || (t.Text == "" && t.Subtext == "") {
+		return 10
+	}
+	h := 16.0
+	ts := ctx.Theme.Title.Text.FontSize
+	if t.TextStyle.FontSize > 0 {
+		ts = t.TextStyle.FontSize
+	}
+	if t.Text != "" {
+		h += ts + 6
+	}
+	sub := ctx.Theme.Title.Subtext.FontSize
+	if t.SubtextStyle.FontSize > 0 {
+		sub = t.SubtextStyle.FontSize
+	}
+	if t.Subtext != "" {
+		h += sub + 4
+	}
+	return h + 6
+}
+
+// reserveLegend 把 rect 在图例所在的一侧收缩，使绘图区不与图例重叠。
+func reserveLegend(rect geom.Rect, p layout.LegendPlacement) geom.Rect {
+	if p.Side == "" || p.Rect.IsZero() {
+		return rect
+	}
+	const gap = 8.0
+	switch p.Side {
+	case "top":
+		if cut := p.Rect.Bottom() + gap - rect.Y; cut > 0 {
+			rect = rect.Inset(cut, 0, 0, 0)
+		}
+	case "bottom":
+		if cut := rect.Bottom() - (p.Rect.Y - gap); cut > 0 {
+			rect = rect.Inset(0, 0, cut, 0)
+		}
+	case "left":
+		if cut := p.Rect.Right() + gap - rect.X; cut > 0 {
+			rect = rect.Inset(0, 0, 0, cut)
+		}
+	case "right":
+		if cut := rect.Right() - (p.Rect.X - gap); cut > 0 {
+			rect = rect.Inset(0, cut, 0, 0)
+		}
+	}
+	return rect
 }
 
 func drawCustomSeries(ctx *Context, renderers map[option.SeriesKind]SeriesRenderer) error {
@@ -648,9 +702,10 @@ func paletteFor(ctx *Context) color.Palette {
 
 // ---- 图例 ----
 
-func drawLegend(ctx *Context) {
+// collectLegendItems 依据 series 类型汇总图例条目，并按 legend.data 过滤。
+func collectLegendItems(ctx *Context) []layout.LegendItem {
 	if ctx.Option == nil {
-		return
+		return nil
 	}
 	items := make([]layout.LegendItem, 0, len(ctx.Option.Series))
 	seen := map[string]bool{}
@@ -676,7 +731,14 @@ func drawLegend(ctx *Context) {
 	if ctx.Option.Legend != nil && len(ctx.Option.Legend.Data) > 0 {
 		items = filterLegendItems(items, ctx.Option.Legend.Data)
 	}
-	layout.DrawLegend(ctx.Canvas, ctx.Bounds, items, ctx.Option.Legend, ctx.Theme)
+	return items
+}
+
+func drawLegend(ctx *Context) {
+	if ctx.Option == nil {
+		return
+	}
+	layout.DrawLegend(ctx.Canvas, ctx.Bounds, ctx.LegendItems, ctx.Option.Legend, ctx.Theme, titleHeight(ctx))
 }
 
 func addLegendItem(items *[]layout.LegendItem, seen map[string]bool, name string, col color.Color) {

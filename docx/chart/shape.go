@@ -94,6 +94,14 @@ func buildHeatmapShape(opt *option.Option, s *option.HeatmapSeries, width, heigh
 		w := maxInt(1, round(cellW))
 		h := maxInt(1, round(cellH))
 		b.WriteString(vmlRect(x, y, w, h, heatmapColor(opt, t), "#FFFFFF"))
+		// 单元格足够大时显示数值；深色格用白字，浅色格用深字。
+		if w >= 30 && h >= 18 {
+			txtColor := "#333333"
+			if t > 0.55 {
+				txtColor = "#FFFFFF"
+			}
+			b.WriteString(vmlText(x, y+h/2-8, w, 16, strconv.FormatFloat(d.Values[2], 'f', -1, 64), txtColor, 9, false))
+		}
 	}
 	for i, label := range xCats {
 		x := left + round((float64(i)+0.5)*cellW) - 28
@@ -127,11 +135,34 @@ func buildGaugeShape(opt *option.Option, s *option.GaugeSeries, width, height in
 		end = *s.EndAngle
 	}
 
+	name := s.Data[0].Name
+	if name == "" {
+		name = s.Name
+	}
+	valueText := strconv.FormatFloat(value, 'f', -1, 64)
+	valueH, nameH := 26, 18
+	labelBlockH := valueH
+	if name != "" {
+		labelBlockH += nameH + 2
+	}
+	labelTop := height - labelBlockH - 6
+	if labelTop < top+44 {
+		labelTop = height - labelBlockH
+	}
+	plotBottom := labelTop - 8
+	if plotBottom < top+40 {
+		plotBottom = top + 40
+	}
+
 	cx := width / 2
-	cy := top + int(float64(height-top)*0.58)
-	radius := minInt(width/2-48, int(float64(height-top)*0.46))
+	cy := top + round(float64(plotBottom-top)*0.58)
+	radius := minInt(width/2-48, int(float64(plotBottom-cy-8)/0.72))
+	radius = minInt(radius, cy-top-6)
 	if radius < 40 {
 		radius = 40
+	}
+	if cy+round(float64(radius)*0.72)+8 > labelTop {
+		radius = maxInt(32, int(float64(labelTop-cy-8)/0.72))
 	}
 	segments := 64
 	activeColor := paletteShapeColor(opt, 0)
@@ -147,16 +178,14 @@ func buildGaugeShape(opt *option.Option, s *option.GaugeSeries, width, height in
 		b.WriteString(vmlLine(x1, y1, x2, y2, color, 4))
 	}
 	needleAngle := start + (end-start)*ratio
-	nx, ny := polarPoint(cx, cy, radius-28, needleAngle)
+	nx, ny := polarPoint(cx, cy, maxInt(8, radius-28), needleAngle)
 	b.WriteString(vmlLine(cx, cy, nx, ny, "#333333", 2))
 	b.WriteString(vmlOval(cx-5, cy-5, 10, 10, "#333333", "#333333"))
 
-	name := s.Data[0].Name
-	if name == "" {
-		name = s.Name
+	b.WriteString(vmlText(cx-90, labelTop, 180, valueH, valueText, "#222222", 16, true))
+	if name != "" {
+		b.WriteString(vmlText(cx-110, labelTop+valueH+2, 220, nameH, name, "#666666", 10, false))
 	}
-	b.WriteString(vmlText(cx-90, cy+22, 180, 24, strconv.FormatFloat(value, 'f', -1, 64), "#222222", 16, true))
-	b.WriteString(vmlText(cx-110, cy+48, 220, 22, name, "#666666", 10, false))
 	return b.String(), nil
 }
 
@@ -166,9 +195,6 @@ func buildFunnelShape(opt *option.Option, s *option.FunnelSeries, width, height 
 	}
 	var b strings.Builder
 	top := writeShapeTitle(&b, opt, width)
-	left, right, bottom := 72, 72, 24
-	plotW := maxInt(1, width-left-right)
-	plotH := maxInt(1, height-top-bottom)
 
 	items := append([]option.DataValue(nil), s.Data...)
 	switch strings.ToLower(s.Sort) {
@@ -178,44 +204,62 @@ func buildFunnelShape(opt *option.Option, s *option.FunnelSeries, width, height 
 	default:
 		sort.SliceStable(items, func(i, j int) bool { return items[i].Number() > items[j].Number() })
 	}
-	maxV := 0.0
+	maxV, totalV := 0.0, 0.0
 	for _, d := range items {
 		if d.Number() > maxV {
 			maxV = d.Number()
 		}
+		totalV += d.Number()
 	}
 	if maxV <= 0 {
 		maxV = 1
 	}
+	if totalV <= 0 {
+		totalV = 1
+	}
+
+	// 预先拼好每段标签（名称 + 值 + 百分比），并按最长标签预留右侧标签列宽度。
+	// 所有标签统一画在漏斗右侧、深色字、完整可见，避免段内白字溢出到色块外被截断。
+	const labelSize = 10
+	labels := make([]string, len(items))
+	maxLabelW := 0
+	for i, d := range items {
+		name := dataName(d)
+		valueText := strconv.FormatFloat(d.Number(), 'f', -1, 64)
+		pct := strconv.FormatFloat(d.Number()/totalV*100, 'f', 1, 64)
+		// 统一格式：名称:数量(百分比%)
+		label := valueText + "(" + pct + "%)"
+		if name != "" {
+			label = name + ":" + label
+		}
+		labels[i] = label
+		if w := estimateTextWidth(label, labelSize); w > maxLabelW {
+			maxLabelW = w
+		}
+	}
+
+	leftMargin, gapToLabel, bottom := 16, 14, 24
+	labelZoneW := minInt(maxLabelW+8, (width-leftMargin)/2)
+	plotW := maxInt(60, width-leftMargin-gapToLabel-labelZoneW)
+	plotH := maxInt(1, height-top-bottom)
+	centerX := leftMargin + plotW/2
+	labelX := centerX + plotW/2 + gapToLabel
 
 	gap := int(s.Gap)
 	if gap <= 0 {
 		gap = 4
 	}
 	segH := maxInt(1, (plotH-gap*(len(items)-1))/len(items))
-	centerX := width / 2
+	// 用居中、宽度随数值递减的矩形条堆叠近似漏斗：跨渲染器（Word/WPS/LibreOffice）稳定，
+	// 而 VML 多边形 path 在部分渲染器（LibreOffice）会被错误缩放。
 	for i, d := range items {
-		topW := funnelWidth(d.Number(), maxV, plotW)
-		bottomW := topW
-		if i+1 < len(items) {
-			bottomW = funnelWidth(items[i+1].Number(), maxV, plotW)
-		} else {
-			bottomW = maxInt(24, int(float64(topW)*0.45))
-		}
+		segW := funnelWidth(d.Number(), maxV, plotW)
 		y1 := top + i*(segH+gap)
-		y2 := y1 + segH
-		points := [][2]int{
-			{centerX - topW/2, y1},
-			{centerX + topW/2, y1},
-			{centerX + bottomW/2, y2},
-			{centerX - bottomW/2, y2},
-		}
-		b.WriteString(vmlPolygon(width, height, points, paletteShapeColor(opt, i), "#FFFFFF"))
-		label := dataName(d)
-		if label == "" {
-			label = strconv.FormatFloat(d.Number(), 'f', -1, 64)
-		}
-		b.WriteString(vmlText(centerX-90, y1+segH/2-10, 180, 20, label, "#FFFFFF", 10, true))
+		fill := paletteShapeColor(opt, i)
+		b.WriteString(vmlRect(centerX-segW/2, y1, segW, segH, fill, "#FFFFFF"))
+		midY := y1 + segH/2
+		// 标签统一画在漏斗右侧、深色字（不画引导线，保证 Word/WPS 的 VML 兼容性）。
+		b.WriteString(vmlText(labelX, midY-9, maxInt(40, width-labelX-2), 18, labels[i], "#333333", labelSize, false))
 	}
 	return b.String(), nil
 }
@@ -292,7 +336,7 @@ func buildWordCloudShape(opt *option.Option, s *option.WordCloudSeries, width, h
 		if y+boxH > height-16 {
 			break
 		}
-		b.WriteString(vmlText(x, y, boxW, boxH, word, paletteShapeColor(opt, i), size, i < 3))
+		b.WriteString(vmlWordText(x, y, boxW, boxH, word, paletteShapeColor(opt, i), size, i < 3))
 		x += boxW + 10
 		if boxH > lineH {
 			lineH = boxH
@@ -302,7 +346,7 @@ func buildWordCloudShape(opt *option.Option, s *option.WordCloudSeries, width, h
 }
 
 func vmlParagraph(width, height int, body string) string {
-	return fmt.Sprintf(`<w:p><w:r><w:pict><v:group coordorigin="0,0" coordsize="%d,%d" style="width:%dpx;height:%dpx;position:relative">%s</v:group></w:pict></w:r></w:p>`, width, height, width, height, body)
+	return fmt.Sprintf(`<w:p><w:r><w:pict><v:group coordorigin="0,0" coordsize="%d,%d" style="width:%dpx;height:%dpx">%s</v:group></w:pict></w:r></w:p>`, width, height, width, height, body)
 }
 
 func writeShapeTitle(b *strings.Builder, opt *option.Option, width int) int {
@@ -337,19 +381,6 @@ func vmlLine(x1, y1, x2, y2 int, color string, weight int) string {
 	return fmt.Sprintf(`<v:line from="%d,%d" to="%d,%d" strokecolor="%s" strokeweight="%dpt"/>`, x1, y1, x2, y2, shapeColor(color, "#333333"), weight)
 }
 
-func vmlPolygon(width, height int, points [][2]int, fill, stroke string) string {
-	if len(points) == 0 {
-		return ""
-	}
-	var path strings.Builder
-	fmt.Fprintf(&path, "m %d,%d", points[0][0], points[0][1])
-	for _, p := range points[1:] {
-		fmt.Fprintf(&path, " l %d,%d", p[0], p[1])
-	}
-	path.WriteString(" x e")
-	return fmt.Sprintf(`<v:shape style="position:absolute;left:0;top:0;width:%dpx;height:%dpx" coordsize="%d,%d" path="%s" fillcolor="%s" strokecolor="%s"/>`, width, height, width, height, path.String(), shapeColor(fill, "#5470C6"), shapeColor(stroke, "#FFFFFF"))
-}
-
 func vmlText(x, y, width, height int, text, color string, size int, bold bool) string {
 	if text == "" || width <= 0 || height <= 0 {
 		return ""
@@ -362,6 +393,34 @@ func vmlText(x, y, width, height int, text, color string, size int, bold bool) s
 	}
 	wordColor := strings.TrimPrefix(shapeColor(color, "#333333"), "#")
 	return fmt.Sprintf(`<v:shape style="position:absolute;left:%dpx;top:%dpx;width:%dpx;height:%dpx" stroked="f" filled="f"><v:textbox inset="0,0,0,0"><w:txbxContent><w:p><w:r><w:rPr>%s<w:color w:val="%s"/><w:sz w:val="%d"/></w:rPr><w:t xml:space="preserve">%s</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape>`, x, y, width, height, boldXML, wordColor, size*2, escape(text))
+}
+
+func vmlWordText(x, y, width, height int, text, color string, size int, bold bool) string {
+	if text == "" || width <= 0 || height <= 0 {
+		return ""
+	}
+	text = strings.ReplaceAll(text, "\r", " ")
+	text = strings.ReplaceAll(text, "\n", " ")
+	boldXML := ""
+	if bold {
+		boldXML = `<w:b/>`
+	}
+	wordColor := strings.TrimPrefix(shapeColor(color, "#333333"), "#")
+	return fmt.Sprintf(`<v:shape style="position:absolute;left:%dpx;top:%dpx;width:%dpx;height:%dpx;mso-wrap-style:none" stroked="f" filled="f"><v:textbox inset="0,0,0,0" style="mso-fit-shape-to-text:t"><w:txbxContent><w:p><w:r><w:rPr>%s<w:noProof/><w:color w:val="%s"/><w:sz w:val="%d"/></w:rPr><w:t xml:space="preserve">%s</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape>`, x, y, width, height, boldXML, wordColor, size*2, escape(text))
+}
+
+// estimateTextWidth 估算文字像素宽度（偏大以确保 Word 文本框够宽、单行不被裁）。
+// size 为字号(pt)，像素宽约为 pt 的 1.33 倍：CJK/全角按 1.5×，其余按 0.75×。
+func estimateTextWidth(s string, size int) int {
+	w := 0.0
+	for _, r := range s {
+		if r > 0x2E7F {
+			w += float64(size) * 1.5
+		} else {
+			w += float64(size) * 0.75
+		}
+	}
+	return int(w)
 }
 
 func polarPoint(cx, cy, radius int, angle float64) (int, int) {

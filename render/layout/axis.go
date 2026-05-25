@@ -68,6 +68,10 @@ func DrawAxis(c zcanvas.Canvas, rect geom.Rect, side AxisSide, sc scale.Scale, o
 		interval = *opt.AxisLabel.Interval + 1
 	}
 
+	// 跟踪上一个已绘制标签沿轴向的占位，避免小图表上标签互相重叠。
+	var haveLabel bool
+	var lastLo, lastHi float64
+
 	for i, tk := range ticks {
 		px := sc.Pixel(tk.Value)
 		// 越界过滤（避免在 rect 外画）
@@ -87,12 +91,19 @@ func DrawAxis(c zcanvas.Canvas, rect geom.Rect, side AxisSide, sc scale.Scale, o
 			// 端点不画分割线（与 axisLine 重叠）
 			c.SetStroke(splitColor)
 			c.SetStrokeWidth(1)
+			switch opt.SplitLine.LineStyle.Type {
+			case "dashed":
+				c.SetDash(0, []float64{4, 4})
+			case "dotted":
+				c.SetDash(0, []float64{1, 3})
+			}
 			switch side {
 			case SideBottom, SideTop:
 				c.DrawLine(px, rect.Y, px, rect.Bottom())
 			case SideLeft, SideRight:
 				c.DrawLine(rect.X, px, rect.Right(), px)
 			}
+			c.SetDash(0, nil)
 		}
 
 		// 刻度短线
@@ -120,10 +131,27 @@ func DrawAxis(c zcanvas.Canvas, rect geom.Rect, side AxisSide, sc scale.Scale, o
 			label = strings.ReplaceAll(opt.AxisLabel.Formatter, "{value}", label)
 		}
 		labelStyle := zcanvas.TextStyle{
-			Family: th.TextStyle.FontFamily,
-			Size:   labelSize,
-			Color:  labelColor,
+			Family:   th.TextStyle.FontFamily,
+			Size:     labelSize,
+			Color:    labelColor,
 			Rotation: opt.AxisLabel.Rotate,
+		}
+		// 重叠检测：计算标签沿轴向占位，与上一个重叠则跳过（旋转标签不参与，交由 interval 控制）。
+		if opt.AxisLabel.Rotate == 0 {
+			var lo, hi float64
+			switch side {
+			case SideLeft, SideRight:
+				half := labelSize * 0.7
+				lo, hi = px-half, px+half
+			case SideBottom, SideTop:
+				w, _, _ := c.MeasureText(label, labelStyle)
+				lo, hi = px-w/2-2, px+w/2+2
+			}
+			if haveLabel && lo < lastHi && hi > lastLo {
+				continue
+			}
+			lastLo, lastHi = lo, hi
+			haveLabel = true
 		}
 		switch side {
 		case SideBottom:

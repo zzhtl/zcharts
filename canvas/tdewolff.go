@@ -2,6 +2,7 @@ package canvas
 
 import (
 	"fmt"
+	stdcolor "image/color"
 	"image/png"
 	"io"
 	"math"
@@ -91,6 +92,23 @@ func (c *tdAdapter) NoStroke() {
 	c.hasStroke = false
 }
 
+func (c *tdAdapter) SetFillLinearGradient(x0, y0, x1, y1 float64, stops []GradientStop) {
+	if len(stops) == 0 {
+		return
+	}
+	g := tdcanvas.NewLinearGradient(tdcanvas.Point{X: x0, Y: y0}, tdcanvas.Point{X: x1, Y: y1})
+	for _, s := range stops {
+		g.Grad.Add(s.Offset, toStdRGBA(s.Color))
+	}
+	c.ctx.SetFillGradient(g)
+	c.hasFill = true
+}
+
+// toStdRGBA 把 zcolor.Color 转成标准库的（预乘）RGBA，供 tdewolff 渐变停靠点使用。
+func toStdRGBA(c zcolor.Color) stdcolor.RGBA {
+	return stdcolor.RGBAModel.Convert(c.NRGBA()).(stdcolor.RGBA)
+}
+
 // ---- 状态栈与变换 ----
 
 func (c *tdAdapter) Save()                       { c.ctx.Push() }
@@ -124,6 +142,15 @@ func (c *tdAdapter) DrawRect(x, y, w, h float64) {
 	c.ctx.LineTo(x, y+h)
 	c.ctx.Close()
 	c.flushPath()
+}
+
+func (c *tdAdapter) DrawRoundedRect(x, y, w, h, r float64) {
+	if r <= 0 || w <= 0 || h <= 0 {
+		c.DrawRect(x, y, w, h)
+		return
+	}
+	p := tdcanvas.RoundedRectangle(w, h, r)
+	c.ctx.DrawPath(x, y, p)
 }
 
 func (c *tdAdapter) DrawCircle(cx, cy, r float64) {
@@ -198,8 +225,10 @@ func (c *tdAdapter) DrawText(x, y float64, s string, style TextStyle) {
 	}
 	w, h, ascent := c.measure(s, style)
 
-	// VAlign 偏移：tdewolff 的 DrawText 在 CartesianIV 下，y 表示文字框 top（顶部）。
-	// 我们把 (x,y) 视为 baseline，按用户的 VAlign 调整。
+	// VAlign 偏移：tdewolff 的 ctx.DrawText 在 CartesianIV 下把传入的 y 当作基线。
+	// 这里把 (x,y) 视为基线参考点，按用户的 VAlign 调整到目标对齐位置。
+	// AlignMiddle 需把字体行盒（ascent+descent≈h）的垂直中心对齐到 y：
+	// 基线 = y + ascent - h/2，因此偏移取 ascent - h/2，与文字内容无关。
 	var dy float64
 	switch style.VAlign {
 	case AlignBaseline:
@@ -207,7 +236,7 @@ func (c *tdAdapter) DrawText(x, y float64, s string, style TextStyle) {
 	case AlignTop:
 		dy = 0
 	case AlignMiddle:
-		dy = -h / 2
+		dy = ascent - h/2
 	case AlignBottom:
 		dy = -h
 	}

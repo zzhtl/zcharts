@@ -3,6 +3,7 @@ package chart
 import (
 	"bytes"
 	"image/png"
+	"strings"
 	"testing"
 
 	"github.com/zzhtl/zcharts/common/color"
@@ -46,5 +47,25 @@ func TestRenderTimelineSeries(t *testing.T) {
 	}
 	if got := img.Bounds().Dy(); got != 240 {
 		t.Fatalf("height=%d", got)
+	}
+}
+
+func TestRenderWordCloudKeepsCompactWords(t *testing.T) {
+	src := []byte(`{
+	  "legend":{"show":false},
+	  "series": [{"type": "wordCloud", "sizeRange": [14, 34], "data": [
+	    {"name":"Word","value":80},{"name":"WPS","value":70},{"name":"原生图表","value":66},
+	    {"name":"散点","value":45},{"name":"雷达","value":42},{"name":"形状绘制","value":58}]}]
+	}`)
+	var out bytes.Buffer
+	err := RenderFromJSON(src, FormatSVG, &out, WithSize(295, 203))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svg := out.String()
+	for _, want := range []string{"Word", "WPS", "原生图表", "散点", "雷达", "形状绘制"} {
+		if !strings.Contains(svg, want) {
+			t.Fatalf("missing word %q in SVG:\n%s", want, svg)
+		}
 	}
 }

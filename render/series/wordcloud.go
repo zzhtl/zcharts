@@ -55,20 +55,24 @@ func DrawWordCloud(a DrawWordCloudArgs) {
 		}
 		style := zcanvas.TextStyle{
 			Family:   pickWordCloudFamily(a.Family, a.Series.TextStyle.FontFamily),
-			Size:     size,
 			Color:    wordColor(a.Series, a.Palette, i),
 			Weight:   a.Series.TextStyle.FontWeight,
 			Anchor:   zcanvas.AnchorMiddle,
 			VAlign:   zcanvas.AlignMiddle,
 			Rotation: wordRotation(a.Series.RotationRange, i),
 		}
-		w, h, _ := a.Canvas.MeasureText(word, style)
-		if w <= 0 || h <= 0 {
-			continue
-		}
-		if pos, box, ok := placeWord(rect, placed, w, h, style.Rotation, grid, i); ok {
-			a.Canvas.DrawText(pos.X, pos.Y, word, style)
-			placed = append(placed, box)
+		minPlacedSize := math.Max(8, minSize*0.72)
+		for trySize := size; trySize >= minPlacedSize; trySize *= 0.9 {
+			style.Size = trySize
+			w, h, _ := a.Canvas.MeasureText(word, style)
+			if w <= 0 || h <= 0 {
+				break
+			}
+			if pos, box, ok := placeWord(rect, placed, w, h, style.Rotation, grid, i); ok {
+				a.Canvas.DrawText(pos.X, pos.Y, word, style)
+				placed = append(placed, box)
+				break
+			}
 		}
 	}
 }

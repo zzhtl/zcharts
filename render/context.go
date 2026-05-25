@@ -9,6 +9,7 @@ import (
 	"github.com/zzhtl/zcharts/common/color"
 	"github.com/zzhtl/zcharts/common/geom"
 	"github.com/zzhtl/zcharts/option"
+	"github.com/zzhtl/zcharts/render/layout"
 	"github.com/zzhtl/zcharts/render/scale"
 	"github.com/zzhtl/zcharts/theme"
 )
@@ -24,6 +25,10 @@ type Context struct {
 
 	// 直角坐标系的绘图区
 	GridRect geom.Rect
+
+	// 图例条目（已按 legend.data 过滤）及其占位，供绘图区预留空间。
+	LegendItems []layout.LegendItem
+	Legend      layout.LegendPlacement
 
 	// 各 axis 的 scale
 	XScales []scale.Scale

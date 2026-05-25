@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/zzhtl/zcharts/common/errs"
+	"github.com/zzhtl/zcharts/common/number"
 	"github.com/zzhtl/zcharts/option"
 )
 
@@ -53,14 +54,42 @@ func BuildChartXML(v any) ([]byte, error) {
 	}
 
 	b.WriteString(`</c:plotArea>`)
-	if opt.Legend != nil && opt.Legend.IsShown() {
-		b.WriteString(`<c:legend><c:legendPos val="r"/><c:layout/><c:overlay val="0"/></c:legend>`)
+	if legendVisible(opt) {
+		fmt.Fprintf(&b, `<c:legend><c:legendPos val="%s"/><c:layout/><c:overlay val="0"/></c:legend>`, legendPos(opt))
 	}
 	b.WriteString(`<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/>`)
 	b.WriteString(`</c:chart>`)
 	b.WriteString(`<c:printSettings><c:headerFooter/><c:pageMargins b="0.75" l="0.7" r="0.7" t="0.75" header="0.3" footer="0.3"/><c:pageSetup/></c:printSettings>`)
 	b.WriteString(`</c:chartSpace>`)
 	return b.Bytes(), nil
+}
+
+// legendVisible 决定 Word 原生图表是否显示图例。
+// 与图片渲染路径保持一致：默认显示，仅在显式 show:false 时隐藏。
+func legendVisible(opt *option.Option) bool {
+	if opt.Legend == nil {
+		return true
+	}
+	return opt.Legend.IsShown()
+}
+
+// legendPos 把 legend 配置映射为 OOXML 图例位置（t/b/l/r），默认顶部，
+// 与图片路径的默认顶部居中一致。
+func legendPos(opt *option.Option) string {
+	l := opt.Legend
+	if l == nil {
+		return "t"
+	}
+	if strings.EqualFold(l.Orient, "vertical") {
+		if l.Left.Set || l.Left.Keyword == "left" {
+			return "l"
+		}
+		return "r"
+	}
+	if l.Bottom.Set || l.Top.Keyword == "bottom" {
+		return "b"
+	}
+	return "t"
 }
 
 func writePlotArea(b *bytes.Buffer, opt *option.Option) error {
@@ -117,17 +146,46 @@ func writePlotArea(b *bytes.Buffer, opt *option.Option) error {
 	if len(bars) == 0 && len(lines) == 0 {
 		return fmt.Errorf("docx/chart: %w: empty native chart", errs.ErrInvalidOption)
 	}
+	// 折线再分为"面积图"（带 areaStyle）与普通折线。
+	var areaLines, plainLines []*option.LineSeries
+	for _, l := range lines {
+		if l.AreaStyle != nil {
+			areaLines = append(areaLines, l)
+		} else {
+			plainLines = append(plainLines, l)
+		}
+	}
+	// 横向条形图：纯柱状且 Y 轴为 category 时，按 ECharts 习惯横向绘制。
+	horizontal := len(bars) > 0 && len(lines) == 0 &&
+		len(opt.YAxis) > 0 && strings.EqualFold(opt.YAxis[0].Type, option.AxisCategory)
 	categories := categoriesFor(opt)
+	if horizontal {
+		categories = yCategoriesFor(opt)
+	}
+
 	order := 0
 	if len(bars) > 0 {
-		writeBarChart(b, bars, categories, order, palette)
+		barDir := "col"
+		if horizontal {
+			barDir = "bar"
+		}
+		writeBarChart(b, bars, categories, order, palette, barDir)
 		order += len(bars)
 	}
-	if len(lines) > 0 {
-		writeLineChart(b, lines, categories, order, palette)
+	if len(areaLines) > 0 {
+		writeAreaChart(b, areaLines, categories, order, palette)
+		order += len(areaLines)
 	}
-	writeCategoryAxis(b)
-	writeValueAxis(b)
+	if len(plainLines) > 0 {
+		writeLineChart(b, plainLines, categories, order, palette)
+	}
+
+	catPos, valPos := "b", "l"
+	if horizontal {
+		catPos, valPos = "l", "b"
+	}
+	writeCategoryAxisAt(b, catPos)
+	writeValueAxisWithID(b, valAxisID, catAxisID, valPos)
 	return nil
 }
 
@@ -137,7 +195,19 @@ func writeTitle(b *bytes.Buffer, text string) {
 	b.WriteString(`</a:r></a:p></c:rich></c:tx><c:layout/><c:overlay val="0"/></c:title>`)
 }
 
-func writeBarChart(b *bytes.Buffer, series []*option.BarSeries, categories []string, orderStart int, palette []string) {
+func writeChartRichText(b *bytes.Buffer, tag, text string, size int) {
+	if size <= 0 {
+		size = 900
+	}
+	fmt.Fprintf(b, `<c:%s><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN" sz="%d"/>`, tag, size)
+	fmt.Fprintf(b, `<a:t>%s</a:t>`, escape(text))
+	b.WriteString(`</a:r></a:p></c:rich></c:` + tag + `>`)
+}
+
+func writeBarChart(b *bytes.Buffer, series []*option.BarSeries, categories []string, orderStart int, palette []string, barDir string) {
+	if barDir == "" {
+		barDir = "col"
+	}
 	grouping := "clustered"
 	for _, s := range series {
 		if s.Stack != "" {
@@ -145,14 +215,47 @@ func writeBarChart(b *bytes.Buffer, series []*option.BarSeries, categories []str
 			break
 		}
 	}
-	b.WriteString(`<c:barChart><c:barDir val="col"/>`)
+	fmt.Fprintf(b, `<c:barChart><c:barDir val="%s"/>`, barDir)
 	fmt.Fprintf(b, `<c:grouping val="%s"/>`, grouping)
 	b.WriteString(`<c:varyColors val="0"/>`)
 	for i, s := range series {
 		writeCartesianSeries(b, s.Name, s.Data, categories, orderStart+i, false, false, paletteAt(palette, orderStart+i))
 	}
+	if grouping == "stacked" {
+		b.WriteString(`<c:overlap val="100"/>`)
+	}
 	writeAxisRefs(b)
 	b.WriteString(`</c:barChart>`)
+}
+
+// writeAreaChart 生成面积图（带 areaStyle 的折线 series）。stack 非空时为堆积面积。
+func writeAreaChart(b *bytes.Buffer, series []*option.LineSeries, categories []string, orderStart int, palette []string) {
+	grouping := "standard"
+	for _, s := range series {
+		if s.Stack != "" {
+			grouping = "stacked"
+			break
+		}
+	}
+	b.WriteString(`<c:areaChart>`)
+	fmt.Fprintf(b, `<c:grouping val="%s"/>`, grouping)
+	b.WriteString(`<c:varyColors val="0"/>`)
+	for i, s := range series {
+		writeAreaSeries(b, s.Name, s.Data, categories, orderStart+i, paletteAt(palette, orderStart+i))
+	}
+	writeAxisRefs(b)
+	b.WriteString(`</c:areaChart>`)
+}
+
+func writeAreaSeries(b *bytes.Buffer, name string, data []option.DataValue, categories []string, order int, color string) {
+	b.WriteString(`<c:ser>`)
+	fmt.Fprintf(b, `<c:idx val="%d"/><c:order val="%d"/>`, order, order)
+	writeSeriesText(b, name)
+	// 半透明填充 + 同色描边。
+	fmt.Fprintf(b, `<c:spPr><a:solidFill><a:srgbClr val="%s"><a:alpha val="55000"/></a:srgbClr></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="%s"/></a:solidFill></a:ln></c:spPr>`, color, color)
+	writeStringLiteral(b, "cat", alignCategories(categories, data))
+	writeNumberLiteral(b, "val", valuesOf(data))
+	b.WriteString(`</c:ser>`)
 }
 
 func writeLineChart(b *bytes.Buffer, series []*option.LineSeries, categories []string, orderStart int, palette []string) {
@@ -176,7 +279,7 @@ func writePieChart(b *bytes.Buffer, s *option.PieSeries, palette []string) {
 	for i := range s.Data {
 		writeDataPointShape(b, i, paletteAt(palette, i))
 	}
-	b.WriteString(`<c:dLbls><c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="1"/><c:showLeaderLines val="1"/></c:dLbls>`)
+	writePieDataLabels(b, s, chartTag)
 	writeStringLiteral(b, "cat", pieCategories(s.Data))
 	writeNumberLiteral(b, "val", valuesOf(s.Data))
 	b.WriteString(`</c:ser><c:firstSliceAng val="0"/>`)
@@ -184,6 +287,59 @@ func writePieChart(b *bytes.Buffer, s *option.PieSeries, palette []string) {
 		fmt.Fprintf(b, `<c:holeSize val="%d"/>`, doughnutHoleSize(s))
 	}
 	fmt.Fprintf(b, `</c:%s>`, chartTag)
+}
+
+func writePieDataLabels(b *bytes.Buffer, s *option.PieSeries, chartTag string) {
+	// 显式写入每个标签文本，避免 Word/WPS 仅靠 showPercent 自行计算时不显示。
+	// 标签放在外侧并开启引导线，给「名称: 百分比」保留完整排版空间。
+	dLblPos := "outEnd"
+	if chartTag == "doughnutChart" {
+		dLblPos = "ctr"
+	}
+	total := 0.0
+	for _, d := range s.Data {
+		if v := d.Number(); v > 0 {
+			total += v
+		}
+	}
+	b.WriteString(`<c:dLbls>`)
+	compact := chartTag == "doughnutChart"
+	labelSize := 900
+	if compact {
+		labelSize = 700
+	}
+	for i, d := range s.Data {
+		label := pieDataLabelText(s, d, total, compact)
+		if label == "" {
+			continue
+		}
+		fmt.Fprintf(b, `<c:dLbl><c:idx val="%d"/>`, i)
+		writeChartRichText(b, "tx", label, labelSize)
+		fmt.Fprintf(b, `<c:dLblPos val="%s"/>`, dLblPos)
+		b.WriteString(`<c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbl>`)
+	}
+	fmt.Fprintf(b, `<c:dLblPos val="%s"/>`, dLblPos)
+	b.WriteString(`<c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/><c:showLeaderLines val="1"/></c:dLbls>`)
+}
+
+func pieDataLabelText(s *option.PieSeries, d option.DataValue, total float64, compact bool) string {
+	value := d.Number()
+	percent := 0.0
+	if total > 0 && value > 0 {
+		percent = value / total
+	}
+	if compact {
+		return number.FormatFloat(percent*100, 1) + "%"
+	}
+	if s.Label.Formatter != "" {
+		r := s.Label.Formatter
+		r = strings.ReplaceAll(r, "{a}", s.Name)
+		r = strings.ReplaceAll(r, "{b}", dataName(d))
+		r = strings.ReplaceAll(r, "{c}", number.FormatAuto(value))
+		r = strings.ReplaceAll(r, "{d}", number.FormatFloat(percent*100, 2))
+		return r
+	}
+	return number.FormatFloat(percent*100, 1) + "%"
 }
 
 func writeScatterChart(b *bytes.Buffer, series []*option.ScatterSeries, palette []string) {
@@ -312,8 +468,15 @@ func writeAxisRefs(b *bytes.Buffer) {
 }
 
 func writeCategoryAxis(b *bytes.Buffer) {
+	writeCategoryAxisAt(b, "b")
+}
+
+func writeCategoryAxisAt(b *bytes.Buffer, pos string) {
+	if pos == "" {
+		pos = "b"
+	}
 	fmt.Fprintf(b, `<c:catAx><c:axId val="%d"/><c:scaling><c:orientation val="minMax"/></c:scaling>`, catAxisID)
-	b.WriteString(`<c:delete val="0"/><c:axPos val="b"/>`)
+	fmt.Fprintf(b, `<c:delete val="0"/><c:axPos val="%s"/>`, escape(pos))
 	fmt.Fprintf(b, `<c:crossAx val="%d"/>`, valAxisID)
 	b.WriteString(`<c:tickLblPos val="nextTo"/></c:catAx>`)
 }
@@ -345,6 +508,21 @@ func categoriesFor(opt *option.Option) []string {
 		case *option.LineSeries:
 			return categoriesFromData(v.Data)
 		case *option.BarSeries:
+			return categoriesFromData(v.Data)
+		}
+	}
+	return nil
+}
+
+// yCategoriesFor 取 Y 轴的 category 标签（横向条形图用）。
+func yCategoriesFor(opt *option.Option) []string {
+	if len(opt.YAxis) > 0 && len(opt.YAxis[0].Data) > 0 {
+		out := make([]string, len(opt.YAxis[0].Data))
+		copy(out, opt.YAxis[0].Data)
+		return out
+	}
+	for _, s := range opt.Series {
+		if v, ok := s.(*option.BarSeries); ok {
 			return categoriesFromData(v.Data)
 		}
 	}

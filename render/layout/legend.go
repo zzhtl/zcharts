@@ -16,12 +16,64 @@ type LegendItem struct {
 	Color color.Color
 }
 
-// DrawLegend 在画布顶部居下方位置水平绘制图例。
-// 第一阶段只支持顶部居中/左/右、水平/竖直，简化的布局。
-func DrawLegend(c zcanvas.Canvas, bounds geom.Rect, items []LegendItem, opt *option.Legend, th *theme.Theme) {
+// LegendPlacement 描述图例最终占据的区域，供主布局为绘图区预留空间。
+// Side 取 "top"/"bottom"/"left"/"right"；无图例时 Side 为空、Rect 为零值。
+type LegendPlacement struct {
+	Rect geom.Rect
+	Side string
+}
+
+// 图例内部留白：图例外接矩形与绘图区之间的间距。
+const legendContentGap = 8
+
+// DrawLegend 在 bounds 内绘制图例。topInset 为标题底部到 bounds 顶的距离，
+// 用于让默认（顶部）图例落在标题下方。
+func DrawLegend(c zcanvas.Canvas, bounds geom.Rect, items []LegendItem, opt *option.Legend, th *theme.Theme, topInset float64) {
 	if len(items) == 0 || opt != nil && !opt.IsShown() {
 		return
 	}
+	st := resolveLegendStyle(c, items, opt, th)
+	g := layoutLegend(bounds, items, st, opt, topInset)
+	drawLegendGeom(c, items, st, g)
+}
+
+// MeasureLegend 在不绘制的前提下计算图例占据的区域，供主布局预留空间。
+// 与 DrawLegend 使用同一套排布逻辑，保证测量与实际绘制位置一致。
+func MeasureLegend(c zcanvas.Canvas, bounds geom.Rect, items []LegendItem, opt *option.Legend, th *theme.Theme, topInset float64) LegendPlacement {
+	if len(items) == 0 || opt != nil && !opt.IsShown() {
+		return LegendPlacement{}
+	}
+	st := resolveLegendStyle(c, items, opt, th)
+	g := layoutLegend(bounds, items, st, opt, topInset)
+	return LegendPlacement{Rect: g.box, Side: legendSide(opt)}
+}
+
+// legendStyle 是解析后的图例样式与度量。
+type legendStyle struct {
+	text     zcanvas.TextStyle
+	iconW    float64
+	iconH    float64
+	gap      float64
+	rowGap   float64
+	measures []legendMeasure
+}
+
+type legendMeasure struct {
+	width      float64
+	height     float64
+	textHeight float64
+	textAscent float64
+}
+
+// legendGeom 是图例的几何排布结果。
+type legendGeom struct {
+	orient     string
+	rows       [][]int   // 横向布局每行包含的 item 下标
+	rowHeights []float64 // 与 rows 对应
+	box        geom.Rect // 图例外接矩形（横向为整条带，纵向为整列）
+}
+
+func resolveLegendStyle(c zcanvas.Canvas, items []LegendItem, opt *option.Legend, th *theme.Theme) legendStyle {
 	textStyle := zcanvas.TextStyle{
 		Family: pickString(th.Legend.Text.FontFamily, th.TextStyle.FontFamily),
 		Size:   th.Legend.Text.FontSize,
@@ -73,29 +125,26 @@ func DrawLegend(c zcanvas.Canvas, bounds geom.Rect, items []LegendItem, opt *opt
 
 	measures := make([]legendMeasure, len(items))
 	for i, it := range items {
-		tw, th, ascent := c.MeasureText(it.Name, textStyle)
-		measures[i] = legendMeasure{width: iconW + 4 + tw, height: maxFloat(iconH, th), textHeight: th, textAscent: ascent}
+		tw, th2, ascent := c.MeasureText(it.Name, textStyle)
+		measures[i] = legendMeasure{
+			width:      iconW + 4 + tw,
+			height:     maxFloat(iconH, th2),
+			textHeight: th2,
+			textAscent: ascent,
+		}
 	}
 
-	orient := "horizontal"
+	return legendStyle{text: textStyle, iconW: iconW, iconH: iconH, gap: gap, rowGap: 8, measures: measures}
+}
+
+func layoutLegend(bounds geom.Rect, items []LegendItem, st legendStyle, opt *option.Legend, topInset float64) legendGeom {
 	if opt != nil && strings.EqualFold(opt.Orient, "vertical") {
-		orient = "vertical"
+		return layoutVerticalLegend(bounds, items, st, opt, topInset)
 	}
-	if orient == "vertical" {
-		drawVerticalLegend(c, bounds, items, measures, opt, textStyle, iconW, iconH, gap)
-		return
-	}
-	drawHorizontalLegend(c, bounds, items, measures, opt, textStyle, iconW, iconH, gap)
+	return layoutHorizontalLegend(bounds, items, st, opt, topInset)
 }
 
-type legendMeasure struct {
-	width      float64
-	height     float64
-	textHeight float64
-	textAscent float64
-}
-
-func drawHorizontalLegend(c zcanvas.Canvas, bounds geom.Rect, items []LegendItem, measures []legendMeasure, opt *option.Legend, textStyle zcanvas.TextStyle, iconW, iconH, gap float64) {
+func layoutHorizontalLegend(bounds geom.Rect, items []LegendItem, st legendStyle, opt *option.Legend, topInset float64) legendGeom {
 	maxW := bounds.W - 20
 	if maxW < 20 {
 		maxW = bounds.W
@@ -105,14 +154,14 @@ func drawHorizontalLegend(c zcanvas.Canvas, bounds geom.Rect, items []LegendItem
 	row := make([]int, 0, len(items))
 	rowW := 0.0
 	for i := range items {
-		nextW := measures[i].width
+		nextW := st.measures[i].width
 		if len(row) > 0 {
-			nextW += gap
+			nextW += st.gap
 		}
 		if len(row) > 0 && rowW+nextW > maxW {
 			rows = append(rows, row)
 			row = []int{i}
-			rowW = measures[i].width
+			rowW = st.measures[i].width
 			continue
 		}
 		row = append(row, i)
@@ -122,50 +171,86 @@ func drawHorizontalLegend(c zcanvas.Canvas, bounds geom.Rect, items []LegendItem
 		rows = append(rows, row)
 	}
 
-	rowGap := 8.0
 	rowHeights := make([]float64, len(rows))
 	totalH := 0.0
 	for i, r := range rows {
 		for _, idx := range r {
-			rowHeights[i] = maxFloat(rowHeights[i], measures[idx].height)
+			rowHeights[i] = maxFloat(rowHeights[i], st.measures[idx].height)
 		}
 		totalH += rowHeights[i]
 	}
-	totalH += rowGap * float64(len(rows)-1)
+	totalH += st.rowGap * float64(len(rows)-1)
 
-	y := defaultLegendY(bounds, opt, totalH)
-	for i, r := range rows {
-		rowWidth := legendRowWidth(r, measures, gap)
-		x := legendX(bounds, opt, rowWidth)
-		for _, idx := range r {
-			drawLegendItem(c, x, y+rowHeights[i]/2, items[idx], measures[idx], textStyle, iconW, iconH)
-			x += measures[idx].width + gap
-		}
-		y += rowHeights[i] + rowGap
+	y := defaultLegendY(bounds, opt, totalH, topInset)
+	return legendGeom{
+		orient:     "horizontal",
+		rows:       rows,
+		rowHeights: rowHeights,
+		box:        geom.Rect{X: bounds.X, Y: y, W: bounds.W, H: totalH},
 	}
 }
 
-func drawVerticalLegend(c zcanvas.Canvas, bounds geom.Rect, items []LegendItem, measures []legendMeasure, opt *option.Legend, textStyle zcanvas.TextStyle, iconW, iconH, gap float64) {
+func layoutVerticalLegend(bounds geom.Rect, items []LegendItem, st legendStyle, opt *option.Legend, topInset float64) legendGeom {
 	totalW := 0.0
 	totalH := 0.0
-	for _, m := range measures {
+	for _, m := range st.measures {
 		totalW = maxFloat(totalW, m.width)
 		totalH += m.height
 	}
-	totalH += gap * float64(len(items)-1)
+	totalH += st.gap * float64(len(items)-1)
 
 	x := legendX(bounds, opt, totalW)
-	y := defaultLegendY(bounds, opt, totalH)
-	for i, it := range items {
-		drawLegendItem(c, x, y+measures[i].height/2, it, measures[i], textStyle, iconW, iconH)
-		y += measures[i].height + gap
+	y := defaultLegendY(bounds, opt, totalH, topInset)
+	return legendGeom{
+		orient: "vertical",
+		box:    geom.Rect{X: x, Y: y, W: totalW, H: totalH},
 	}
 }
 
-func defaultLegendY(bounds geom.Rect, opt *option.Legend, totalH float64) float64 {
-	y := bounds.Y + 60
+func drawLegendGeom(c zcanvas.Canvas, items []LegendItem, st legendStyle, g legendGeom) {
+	if g.orient == "vertical" {
+		y := g.box.Y
+		for i := range items {
+			drawLegendItem(c, g.box.X, y+st.measures[i].height/2, items[i], st.text, st.iconW, st.iconH)
+			y += st.measures[i].height + st.gap
+		}
+		return
+	}
+	y := g.box.Y
+	for i, r := range g.rows {
+		rowWidth := legendRowWidth(r, st.measures, st.gap)
+		x := legendRowX(g.box, r, rowWidth)
+		for _, idx := range r {
+			drawLegendItem(c, x, y+g.rowHeights[i]/2, items[idx], st.text, st.iconW, st.iconH)
+			x += st.measures[idx].width + st.gap
+		}
+		y += g.rowHeights[i] + st.rowGap
+	}
+}
+
+// legendRowX 在外接矩形内按其对齐方式定位单行起点。横向 box 的 X/W 与 bounds 一致，
+// 因此这里直接用 box 居中，水平对齐由 layout 阶段的 box 决定。
+func legendRowX(box geom.Rect, _ []int, rowWidth float64) float64 {
+	return box.X + box.W/2 - rowWidth/2
+}
+
+func legendSide(opt *option.Legend) string {
+	if opt != nil && strings.EqualFold(opt.Orient, "vertical") {
+		if opt.Right.Set || opt.Left.Keyword == "right" {
+			return "right"
+		}
+		return "left"
+	}
+	if opt != nil && (opt.Bottom.Set || opt.Top.Keyword == "bottom") {
+		return "bottom"
+	}
+	return "top"
+}
+
+func defaultLegendY(bounds geom.Rect, opt *option.Legend, totalH, topInset float64) float64 {
+	y := bounds.Y + topInset
 	if opt != nil && opt.Top.Set {
-		y = bounds.Y + opt.Top.Resolve(bounds.H, 60)
+		y = bounds.Y + opt.Top.Resolve(bounds.H, topInset)
 	}
 	if opt != nil && opt.Bottom.Set {
 		y = bounds.Bottom() - opt.Bottom.Resolve(bounds.H, 0) - totalH
@@ -212,12 +297,14 @@ func legendRowWidth(row []int, measures []legendMeasure, gap float64) float64 {
 	return w
 }
 
-func drawLegendItem(c zcanvas.Canvas, x, y float64, it LegendItem, measure legendMeasure, textStyle zcanvas.TextStyle, iconW, iconH float64) {
+// drawLegendItem 在 (x, y) 处绘制色块与文字，y 为该条目的垂直中线。
+// 色块以 y 为中心，文字用 AlignMiddle 在同一中线居中。
+func drawLegendItem(c zcanvas.Canvas, x, y float64, it LegendItem, textStyle zcanvas.TextStyle, iconW, iconH float64) {
 	c.SetFill(it.Color)
 	c.NoStroke()
 	c.DrawRect(x, y-iconH/2, iconW, iconH)
-	textStyle.VAlign = zcanvas.AlignBaseline
-	c.DrawText(x+iconW+4, y+measure.textAscent-measure.textHeight/2+iconH+3, it.Name, textStyle)
+	textStyle.VAlign = zcanvas.AlignMiddle
+	c.DrawText(x+iconW+4, y, it.Name, textStyle)
 }
 
 func pickString(over, fallback string) string {

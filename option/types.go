@@ -253,10 +253,11 @@ type AreaStyle struct {
 
 // ItemStyle 描述单个图元样式。
 type ItemStyle struct {
-	Color       ColorString `json:"color,omitempty"`
-	BorderColor ColorString `json:"borderColor,omitempty"`
-	BorderWidth float64     `json:"borderWidth,omitempty"`
-	Opacity     *float64    `json:"opacity,omitempty"`
+	Color        ColorString `json:"color,omitempty"`
+	BorderColor  ColorString `json:"borderColor,omitempty"`
+	BorderWidth  float64     `json:"borderWidth,omitempty"`
+	BorderRadius float64     `json:"borderRadius,omitempty"` // 柱状圆角半径（像素）
+	Opacity      *float64    `json:"opacity,omitempty"`
 }
 
 // Label 描述图元上的文字标签（对齐 ECharts label 字段）。
