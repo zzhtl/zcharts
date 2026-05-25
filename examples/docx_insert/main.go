@@ -41,13 +41,19 @@ func main() {
 	doc.AddParagraph("月度业务报告")
 	doc.AddParagraph("以下为本月销售折线图：")
 
-	line, _ := jsonopt.ParseString(lineJSON)
+	line, err := jsonopt.ParseString(lineJSON)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if err := doc.AddChart(line, docx.AsImage(docx.PNG, 720, 400)); err != nil {
 		log.Fatal(err)
 	}
 	doc.AddParagraph("流量来源分布：")
 
-	pie, _ := jsonopt.ParseString(pieJSON)
+	pie, err := jsonopt.ParseString(pieJSON)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if err := doc.AddChart(pie, docx.AsImage(docx.PNG, 640, 480)); err != nil {
 		log.Fatal(err)
 	}

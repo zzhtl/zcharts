@@ -14,7 +14,7 @@ import (
 type DrawPieArgs struct {
 	Canvas  zcanvas.Canvas
 	Series  *option.PieSeries
-	Bounds  geom.Rect    // 整张画布
+	Bounds  geom.Rect     // 整张画布
 	Palette color.Palette // 配色（series.itemStyle.color 覆盖之后兜底）
 	Family  string
 }
@@ -65,10 +65,7 @@ func DrawPie(a DrawPieArgs) {
 
 		// 颜色
 		c := a.Palette.At(i)
-		if d.Raw != nil {
-			// 数据项可指定 itemStyle.color，但我们已经在 Pie 用 Palette.At 兜底，
-			// 这里如果需要进一步细化可解析 d.Raw 中的 itemStyle，当前阶段省略
-		}
+		// 数据项可指定 itemStyle.color；当前 Pie 渲染仍以 Palette.At 兜底。
 		a.Canvas.SetFill(c)
 		a.Canvas.SetStroke(color.RGB(255, 255, 255))
 		a.Canvas.SetStrokeWidth(2)
@@ -158,6 +155,7 @@ func anchorForAngle(angleDeg float64) zcanvas.TextAnchor {
 }
 
 // formatLabel 实现 ECharts 风格的 label formatter，支持：
+//
 //	{a} → series name
 //	{b} → data name
 //	{c} → data value

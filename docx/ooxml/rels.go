@@ -55,4 +55,5 @@ func (r *Rels) XML() []byte {
 const (
 	RelOfficeDocument = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
 	RelImage          = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+	RelChart          = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart"
 )

@@ -19,6 +19,7 @@ type DrawBarArgs struct {
 	SeriesIndex    int     // 该 Bar 在所有同坐标 Bar series 中的索引（用于并排）
 	TotalBarSeries int     // 同坐标 Bar series 总数
 	BandWidth      float64 // 单 category 占据的像素宽度
+	StackBases     []float64
 }
 
 // DrawBar 绘制一个 Bar series。多 series 时按 SeriesIndex/TotalBarSeries 在每个 category 内并排。
@@ -37,7 +38,6 @@ func DrawBar(a DrawBarArgs) {
 		barWidth = 1
 	}
 
-	baseY := a.YScale.Pixel(0)
 	borderColor := a.Color
 	if a.Series.ItemStyle.BorderColor != "" {
 		if c, err := color.Parse(string(a.Series.ItemStyle.BorderColor)); err == nil {
@@ -57,14 +57,19 @@ func DrawBar(a DrawBarArgs) {
 		cx := a.XScale.Pixel(float64(i))
 		groupStart := cx - groupWidth/2
 		x := groupStart + float64(a.SeriesIndex)*barWidth
-		y := a.YScale.Pixel(d.Number())
+		base := 0.0
+		if i < len(a.StackBases) {
+			base = a.StackBases[i]
+		}
+		baseY := a.YScale.Pixel(base)
+		valueY := a.YScale.Pixel(base + d.Number())
 		var top, height float64
-		if y <= baseY {
-			top = y
-			height = baseY - y
+		if valueY <= baseY {
+			top = valueY
+			height = baseY - valueY
 		} else {
 			top = baseY
-			height = y - baseY
+			height = valueY - baseY
 		}
 		a.Canvas.SetFill(fillColor)
 		if borderWidth > 0 {

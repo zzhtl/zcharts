@@ -1,22 +1,518 @@
-// Package chart 是 Word docx 中"原生 OOXML chart XML"的占位包。
+// Package chart 生成 Word docx 中的原生 OOXML chart XML 和形状绘制 XML。
 //
-// 第一阶段不实现：当用户调用 docx.AddChart(..., docx.AsNativeChart()) 时，
-// 直接返回 errs.ErrNotImplemented。
-//
-// 后续要补充的内容（指引）：
-//
-//	- 生成 word/charts/chartN.xml（参考 ECMA-376 Part 1，DrawingML chart）
-//	- 在 word/_rels/document.xml.rels 中加 chart relationship
-//	- 在 [Content_Types].xml 中 Override chart MIME
-//	- 在 document.xml 段落中插入 <w:drawing> 引用 chart
-//
-// 接口签名预留在此，方便未来填充实现。
+// 该包面向 docx.AsNativeChart() 路径，覆盖 Word 原生图表里最常用的
+// line/bar/pie/scatter/radar；部分非标准 chart 类型用 Word/WPS 形状绘制。
 package chart
 
-import "github.com/zzhtl/zcharts/common/errs"
+import (
+	"bytes"
+	"encoding/xml"
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/zzhtl/zcharts/common/errs"
+	"github.com/zzhtl/zcharts/option"
+)
+
+const (
+	catAxisID      = 12345678
+	valAxisID      = 12345679
+	scatterXAxisID = 12345680
+	scatterYAxisID = 12345681
+)
+
+var defaultPalette = []string{"5470C6", "91CC75", "FAC858", "EE6666", "73C0DE", "3BA272", "FC8452", "9A60B4", "EA7CCC"}
 
 // BuildChartXML 接受一个 zcharts option，返回 OOXML chart 部件的 XML 字节。
-// 当前总是返回 errs.ErrNotImplemented。
-func BuildChartXML(_ any) ([]byte, error) {
-	return nil, errs.ErrNotImplemented
+//
+// 当前支持 line/bar/pie/scatter/radar；热力、仪表盘、漏斗、词云等图表请走图片嵌入路径。
+func BuildChartXML(v any) ([]byte, error) {
+	opt, ok := v.(*option.Option)
+	if !ok || opt == nil {
+		return nil, fmt.Errorf("docx/chart: %w", errs.ErrInvalidOption)
+	}
+	if len(opt.Series) == 0 {
+		return nil, fmt.Errorf("docx/chart: %w: empty series", errs.ErrInvalidOption)
+	}
+
+	var b bytes.Buffer
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+	b.WriteString(`<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" `)
+	b.WriteString(`xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" `)
+	b.WriteString(`xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`)
+	b.WriteString(`<c:date1904 val="0"/><c:lang val="zh-CN"/><c:roundedCorners val="0"/>`)
+	b.WriteString(`<c:chart>`)
+	if opt.Title != nil && opt.Title.Text != "" {
+		writeTitle(&b, opt.Title.Text)
+	}
+	b.WriteString(`<c:plotArea><c:layout/>`)
+
+	if err := writePlotArea(&b, opt); err != nil {
+		return nil, err
+	}
+
+	b.WriteString(`</c:plotArea>`)
+	if opt.Legend != nil && opt.Legend.IsShown() {
+		b.WriteString(`<c:legend><c:legendPos val="r"/><c:layout/><c:overlay val="0"/></c:legend>`)
+	}
+	b.WriteString(`<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/>`)
+	b.WriteString(`</c:chart>`)
+	b.WriteString(`<c:printSettings><c:headerFooter/><c:pageMargins b="0.75" l="0.7" r="0.7" t="0.75" header="0.3" footer="0.3"/><c:pageSetup/></c:printSettings>`)
+	b.WriteString(`</c:chartSpace>`)
+	return b.Bytes(), nil
+}
+
+func writePlotArea(b *bytes.Buffer, opt *option.Option) error {
+	lines := make([]*option.LineSeries, 0)
+	bars := make([]*option.BarSeries, 0)
+	pies := make([]*option.PieSeries, 0)
+	scatters := make([]*option.ScatterSeries, 0)
+	radars := make([]*option.RadarSeries, 0)
+	for _, s := range opt.Series {
+		switch v := s.(type) {
+		case *option.LineSeries:
+			lines = append(lines, v)
+		case *option.BarSeries:
+			bars = append(bars, v)
+		case *option.PieSeries:
+			pies = append(pies, v)
+		case *option.ScatterSeries:
+			scatters = append(scatters, v)
+		case *option.RadarSeries:
+			radars = append(radars, v)
+		default:
+			return fmt.Errorf("docx/chart: %w: %s", errs.ErrUnsupportedSeries, s.Kind())
+		}
+	}
+
+	palette := paletteFor(opt)
+	if len(pies) > 0 {
+		if len(pies) != len(opt.Series) || len(pies) > 1 {
+			return fmt.Errorf("docx/chart: %w: mixed or multiple pie series", errs.ErrUnsupportedSeries)
+		}
+		writePieChart(b, pies[0], palette)
+		return nil
+	}
+	if len(scatters) > 0 {
+		if len(scatters) != len(opt.Series) {
+			return fmt.Errorf("docx/chart: %w: mixed scatter chart", errs.ErrUnsupportedSeries)
+		}
+		writeScatterChart(b, scatters, palette)
+		writeValueAxisWithID(b, scatterXAxisID, scatterYAxisID, "b")
+		writeValueAxisWithID(b, scatterYAxisID, scatterXAxisID, "l")
+		return nil
+	}
+	if len(radars) > 0 {
+		if len(radars) != len(opt.Series) {
+			return fmt.Errorf("docx/chart: %w: mixed radar chart", errs.ErrUnsupportedSeries)
+		}
+		if err := writeRadarChart(b, radars, opt.Radar, palette); err != nil {
+			return err
+		}
+		writeCategoryAxis(b)
+		writeValueAxis(b)
+		return nil
+	}
+	if len(bars) == 0 && len(lines) == 0 {
+		return fmt.Errorf("docx/chart: %w: empty native chart", errs.ErrInvalidOption)
+	}
+	categories := categoriesFor(opt)
+	order := 0
+	if len(bars) > 0 {
+		writeBarChart(b, bars, categories, order, palette)
+		order += len(bars)
+	}
+	if len(lines) > 0 {
+		writeLineChart(b, lines, categories, order, palette)
+	}
+	writeCategoryAxis(b)
+	writeValueAxis(b)
+	return nil
+}
+
+func writeTitle(b *bytes.Buffer, text string) {
+	b.WriteString(`<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN"/>`)
+	fmt.Fprintf(b, `<a:t>%s</a:t>`, escape(text))
+	b.WriteString(`</a:r></a:p></c:rich></c:tx><c:layout/><c:overlay val="0"/></c:title>`)
+}
+
+func writeBarChart(b *bytes.Buffer, series []*option.BarSeries, categories []string, orderStart int, palette []string) {
+	grouping := "clustered"
+	for _, s := range series {
+		if s.Stack != "" {
+			grouping = "stacked"
+			break
+		}
+	}
+	b.WriteString(`<c:barChart><c:barDir val="col"/>`)
+	fmt.Fprintf(b, `<c:grouping val="%s"/>`, grouping)
+	b.WriteString(`<c:varyColors val="0"/>`)
+	for i, s := range series {
+		writeCartesianSeries(b, s.Name, s.Data, categories, orderStart+i, false, false, paletteAt(palette, orderStart+i))
+	}
+	writeAxisRefs(b)
+	b.WriteString(`</c:barChart>`)
+}
+
+func writeLineChart(b *bytes.Buffer, series []*option.LineSeries, categories []string, orderStart int, palette []string) {
+	b.WriteString(`<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>`)
+	for i, s := range series {
+		writeCartesianSeries(b, s.Name, s.Data, categories, orderStart+i, true, s.Smooth, paletteAt(palette, orderStart+i))
+	}
+	writeAxisRefs(b)
+	b.WriteString(`</c:lineChart>`)
+}
+
+func writePieChart(b *bytes.Buffer, s *option.PieSeries, palette []string) {
+	chartTag := "pieChart"
+	if isDoughnutPie(s) {
+		chartTag = "doughnutChart"
+	}
+	fmt.Fprintf(b, `<c:%s><c:varyColors val="1"/>`, chartTag)
+	b.WriteString(`<c:ser>`)
+	b.WriteString(`<c:idx val="0"/><c:order val="0"/>`)
+	writeSeriesText(b, s.Name)
+	for i := range s.Data {
+		writeDataPointShape(b, i, paletteAt(palette, i))
+	}
+	b.WriteString(`<c:dLbls><c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="1"/><c:showLeaderLines val="1"/></c:dLbls>`)
+	writeStringLiteral(b, "cat", pieCategories(s.Data))
+	writeNumberLiteral(b, "val", valuesOf(s.Data))
+	b.WriteString(`</c:ser><c:firstSliceAng val="0"/>`)
+	if chartTag == "doughnutChart" {
+		fmt.Fprintf(b, `<c:holeSize val="%d"/>`, doughnutHoleSize(s))
+	}
+	fmt.Fprintf(b, `</c:%s>`, chartTag)
+}
+
+func writeScatterChart(b *bytes.Buffer, series []*option.ScatterSeries, palette []string) {
+	b.WriteString(`<c:scatterChart><c:scatterStyle val="marker"/><c:varyColors val="0"/>`)
+	for i, s := range series {
+		writeScatterSeries(b, s, i, paletteAt(palette, i))
+	}
+	fmt.Fprintf(b, `<c:axId val="%d"/><c:axId val="%d"/>`, scatterXAxisID, scatterYAxisID)
+	b.WriteString(`</c:scatterChart>`)
+}
+
+func writeScatterSeries(b *bytes.Buffer, s *option.ScatterSeries, order int, color string) {
+	b.WriteString(`<c:ser>`)
+	fmt.Fprintf(b, `<c:idx val="%d"/><c:order val="%d"/>`, order, order)
+	writeSeriesText(b, s.Name)
+	b.WriteString(`<c:spPr><a:ln><a:noFill/></a:ln></c:spPr>`)
+	writeMarker(b, color, s.SymbolSize)
+	writeNumberLiteral(b, "xVal", xValuesOf(s.Data))
+	writeNumberLiteral(b, "yVal", yValuesOf(s.Data))
+	b.WriteString(`<c:smooth val="0"/>`)
+	b.WriteString(`</c:ser>`)
+}
+
+func writeRadarChart(b *bytes.Buffer, series []*option.RadarSeries, radar *option.Radar, palette []string) error {
+	categories := radarCategories(series, radar)
+	if len(categories) == 0 {
+		return fmt.Errorf("docx/chart: %w: empty radar indicator", errs.ErrInvalidOption)
+	}
+	b.WriteString(`<c:radarChart><c:radarStyle val="marker"/><c:varyColors val="0"/>`)
+	order := 0
+	for _, s := range series {
+		for _, item := range s.Data {
+			name := item.Name
+			if name == "" {
+				name = s.Name
+			}
+			writeRadarSeries(b, name, item.Value, categories, order, paletteAt(palette, order))
+			order++
+		}
+	}
+	if order == 0 {
+		return fmt.Errorf("docx/chart: %w: empty radar data", errs.ErrInvalidOption)
+	}
+	writeAxisRefs(b)
+	b.WriteString(`</c:radarChart>`)
+	return nil
+}
+
+func writeRadarSeries(b *bytes.Buffer, name string, values []float64, categories []string, order int, color string) {
+	b.WriteString(`<c:ser>`)
+	fmt.Fprintf(b, `<c:idx val="%d"/><c:order val="%d"/>`, order, order)
+	writeSeriesText(b, name)
+	writeSeriesShape(b, color, true)
+	writeMarker(b, color, 5)
+	writeStringLiteral(b, "cat", categories)
+	writeNumberLiteral(b, "val", alignFloatValues(values, len(categories)))
+	b.WriteString(`</c:ser>`)
+}
+
+func writeCartesianSeries(b *bytes.Buffer, name string, data []option.DataValue, categories []string, order int, marker bool, smooth bool, color string) {
+	b.WriteString(`<c:ser>`)
+	fmt.Fprintf(b, `<c:idx val="%d"/><c:order val="%d"/>`, order, order)
+	writeSeriesText(b, name)
+	writeSeriesShape(b, color, marker)
+	if marker {
+		b.WriteString(`<c:marker><c:symbol val="none"/></c:marker>`)
+	}
+	writeStringLiteral(b, "cat", alignCategories(categories, data))
+	writeNumberLiteral(b, "val", valuesOf(data))
+	if smooth {
+		b.WriteString(`<c:smooth val="1"/>`)
+	}
+	b.WriteString(`</c:ser>`)
+}
+
+func writeSeriesShape(b *bytes.Buffer, color string, line bool) {
+	if line {
+		fmt.Fprintf(b, `<c:spPr><a:ln w="28575"><a:solidFill><a:srgbClr val="%s"/></a:solidFill></a:ln></c:spPr>`, color)
+		return
+	}
+	fmt.Fprintf(b, `<c:spPr><a:solidFill><a:srgbClr val="%s"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr>`, color)
+}
+
+func writeMarker(b *bytes.Buffer, color string, size float64) {
+	if size <= 0 {
+		size = 6
+	}
+	if size < 2 {
+		size = 2
+	}
+	if size > 72 {
+		size = 72
+	}
+	fmt.Fprintf(b, `<c:marker><c:symbol val="circle"/><c:size val="%s"/><c:spPr><a:solidFill><a:srgbClr val="%s"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr></c:marker>`, strconv.FormatFloat(size, 'f', 0, 64), color)
+}
+
+func writeDataPointShape(b *bytes.Buffer, idx int, color string) {
+	fmt.Fprintf(b, `<c:dPt><c:idx val="%d"/><c:spPr><a:solidFill><a:srgbClr val="%s"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr></c:dPt>`, idx, color)
+}
+
+func writeSeriesText(b *bytes.Buffer, name string) {
+	if name == "" {
+		return
+	}
+	fmt.Fprintf(b, `<c:tx><c:v>%s</c:v></c:tx>`, escape(name))
+}
+
+func writeStringLiteral(b *bytes.Buffer, tag string, values []string) {
+	fmt.Fprintf(b, `<c:%s><c:strLit><c:ptCount val="%d"/>`, tag, len(values))
+	for i, v := range values {
+		fmt.Fprintf(b, `<c:pt idx="%d"><c:v>%s</c:v></c:pt>`, i, escape(v))
+	}
+	fmt.Fprintf(b, `</c:strLit></c:%s>`, tag)
+}
+
+func writeNumberLiteral(b *bytes.Buffer, tag string, values []float64) {
+	fmt.Fprintf(b, `<c:%s><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="%d"/>`, tag, len(values))
+	for i, v := range values {
+		fmt.Fprintf(b, `<c:pt idx="%d"><c:v>%s</c:v></c:pt>`, i, strconv.FormatFloat(v, 'f', -1, 64))
+	}
+	fmt.Fprintf(b, `</c:numLit></c:%s>`, tag)
+}
+
+func writeAxisRefs(b *bytes.Buffer) {
+	fmt.Fprintf(b, `<c:axId val="%d"/><c:axId val="%d"/>`, catAxisID, valAxisID)
+}
+
+func writeCategoryAxis(b *bytes.Buffer) {
+	fmt.Fprintf(b, `<c:catAx><c:axId val="%d"/><c:scaling><c:orientation val="minMax"/></c:scaling>`, catAxisID)
+	b.WriteString(`<c:delete val="0"/><c:axPos val="b"/>`)
+	fmt.Fprintf(b, `<c:crossAx val="%d"/>`, valAxisID)
+	b.WriteString(`<c:tickLblPos val="nextTo"/></c:catAx>`)
+}
+
+func writeValueAxis(b *bytes.Buffer) {
+	writeValueAxisWithID(b, valAxisID, catAxisID, "l")
+}
+
+func writeValueAxisWithID(b *bytes.Buffer, axisID, crossAxisID int, pos string) {
+	fmt.Fprintf(b, `<c:valAx><c:axId val="%d"/><c:scaling><c:orientation val="minMax"/></c:scaling>`, axisID)
+	b.WriteString(`<c:delete val="0"/>`)
+	if pos != "" {
+		fmt.Fprintf(b, `<c:axPos val="%s"/>`, escape(pos))
+	} else {
+		b.WriteString(`<c:axPos val="l"/>`)
+	}
+	fmt.Fprintf(b, `<c:crossAx val="%d"/>`, crossAxisID)
+	b.WriteString(`<c:crosses val="autoZero"/><c:tickLblPos val="nextTo"/></c:valAx>`)
+}
+
+func categoriesFor(opt *option.Option) []string {
+	if len(opt.XAxis) > 0 && len(opt.XAxis[0].Data) > 0 {
+		out := make([]string, len(opt.XAxis[0].Data))
+		copy(out, opt.XAxis[0].Data)
+		return out
+	}
+	for _, s := range opt.Series {
+		switch v := s.(type) {
+		case *option.LineSeries:
+			return categoriesFromData(v.Data)
+		case *option.BarSeries:
+			return categoriesFromData(v.Data)
+		}
+	}
+	return nil
+}
+
+func categoriesFromData(data []option.DataValue) []string {
+	out := make([]string, len(data))
+	for i, d := range data {
+		switch {
+		case d.Label != "":
+			out[i] = d.Label
+		case d.Name != "":
+			out[i] = d.Name
+		default:
+			out[i] = strconv.Itoa(i + 1)
+		}
+	}
+	return out
+}
+
+func pieCategories(data []option.DataValue) []string {
+	return categoriesFromData(data)
+}
+
+func isDoughnutPie(s *option.PieSeries) bool {
+	return s != nil && len(s.Radius) >= 2 && s.Radius[0].Value > 0
+}
+
+func doughnutHoleSize(s *option.PieSeries) int {
+	if s == nil || len(s.Radius) < 2 {
+		return 50
+	}
+	inner, outer := s.Radius[0].Value, s.Radius[1].Value
+	if inner <= 0 || outer <= 0 {
+		return 50
+	}
+	size := int(inner / outer * 100)
+	if size < 10 {
+		return 10
+	}
+	if size > 90 {
+		return 90
+	}
+	return size
+}
+
+func alignCategories(categories []string, data []option.DataValue) []string {
+	if len(categories) >= len(data) {
+		return categories[:len(data)]
+	}
+	out := make([]string, len(data))
+	copy(out, categories)
+	for i := len(categories); i < len(data); i++ {
+		d := data[i]
+		switch {
+		case d.Label != "":
+			out[i] = d.Label
+		case d.Name != "":
+			out[i] = d.Name
+		default:
+			out[i] = strconv.Itoa(i + 1)
+		}
+	}
+	return out
+}
+
+func valuesOf(data []option.DataValue) []float64 {
+	out := make([]float64, len(data))
+	for i, d := range data {
+		out[i] = d.Number()
+	}
+	return out
+}
+
+func xValuesOf(data []option.DataValue) []float64 {
+	out := make([]float64, len(data))
+	for i, d := range data {
+		x, _ := d.Pair()
+		out[i] = x
+	}
+	return out
+}
+
+func yValuesOf(data []option.DataValue) []float64 {
+	out := make([]float64, len(data))
+	for i, d := range data {
+		_, y := d.Pair()
+		out[i] = y
+	}
+	return out
+}
+
+func radarCategories(series []*option.RadarSeries, radar *option.Radar) []string {
+	if radar != nil && len(radar.Indicator) > 0 {
+		out := make([]string, len(radar.Indicator))
+		for i, item := range radar.Indicator {
+			if item.Name != "" {
+				out[i] = item.Name
+			} else {
+				out[i] = strconv.Itoa(i + 1)
+			}
+		}
+		return out
+	}
+	maxLen := 0
+	for _, s := range series {
+		for _, item := range s.Data {
+			if len(item.Value) > maxLen {
+				maxLen = len(item.Value)
+			}
+		}
+	}
+	out := make([]string, maxLen)
+	for i := range out {
+		out[i] = strconv.Itoa(i + 1)
+	}
+	return out
+}
+
+func alignFloatValues(values []float64, n int) []float64 {
+	if len(values) >= n {
+		return values[:n]
+	}
+	out := make([]float64, n)
+	copy(out, values)
+	return out
+}
+
+func paletteFor(opt *option.Option) []string {
+	out := make([]string, 0, len(opt.Color))
+	for _, c := range opt.Color {
+		if hex := normalizeHexColor(c); hex != "" {
+			out = append(out, hex)
+		}
+	}
+	if len(out) > 0 {
+		return out
+	}
+	return defaultPalette
+}
+
+func paletteAt(palette []string, index int) string {
+	if len(palette) == 0 {
+		return defaultPalette[index%len(defaultPalette)]
+	}
+	return palette[((index%len(palette))+len(palette))%len(palette)]
+}
+
+func normalizeHexColor(c string) string {
+	c = strings.TrimSpace(c)
+	c = strings.TrimPrefix(c, "#")
+	switch len(c) {
+	case 3:
+		var b strings.Builder
+		for _, r := range c {
+			b.WriteRune(r)
+			b.WriteRune(r)
+		}
+		return strings.ToUpper(b.String())
+	case 6:
+		return strings.ToUpper(c)
+	}
+	return ""
+}
+
+func escape(s string) string {
+	var b bytes.Buffer
+	_ = xml.EscapeText(&b, []byte(s))
+	return b.String()
 }

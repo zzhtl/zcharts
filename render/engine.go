@@ -1,6 +1,8 @@
 package render
 
 import (
+	"fmt"
+
 	"github.com/zzhtl/zcharts/canvas"
 	"github.com/zzhtl/zcharts/common/color"
 	"github.com/zzhtl/zcharts/common/geom"
@@ -11,8 +13,21 @@ import (
 	"github.com/zzhtl/zcharts/theme"
 )
 
+// SeriesRenderer 允许用户为未内置的 series.type 注册渲染逻辑。
+type SeriesRenderer func(ctx *Context, s option.Series, index int) error
+
+// RenderOptions 控制渲染引擎的扩展行为。
+type RenderOptions struct {
+	SeriesRenderers map[option.SeriesKind]SeriesRenderer
+}
+
 // Render 把 opt 渲染到 c 上。th 为 nil 时使用 theme.Default()。
 func Render(c canvas.Canvas, opt *option.Option, th *theme.Theme) error {
+	return RenderWithOptions(c, opt, th, RenderOptions{})
+}
+
+// RenderWithOptions 把 opt 渲染到 c 上，并允许传入自定义 series 渲染器。
+func RenderWithOptions(c canvas.Canvas, opt *option.Option, th *theme.Theme, opts RenderOptions) error {
 	if th == nil {
 		th = theme.Default()
 	}
@@ -31,13 +46,19 @@ func Render(c canvas.Canvas, opt *option.Option, th *theme.Theme) error {
 
 	assignColors(ctx)
 
-	hasCartesian, hasPolar := false, false
+	hasCartesian, hasPolar, hasFree := false, false, false
 	for _, s := range opt.Series {
 		switch s.Kind() {
 		case option.KindLine, option.KindBar, option.KindScatter, option.KindHeatmap:
 			hasCartesian = true
 		case option.KindPie, option.KindRadar, option.KindGauge:
 			hasPolar = true
+		case option.KindFunnel, option.KindTimeline, option.KindWordCloud:
+			hasFree = true
+		default:
+			if v, ok := s.(*option.CustomSeries); ok && v.CoordinateSystem == "cartesian2d" {
+				hasCartesian = true
+			}
 		}
 	}
 
@@ -51,6 +72,12 @@ func Render(c canvas.Canvas, opt *option.Option, th *theme.Theme) error {
 
 	if hasPolar {
 		drawPolarSeries(ctx)
+	}
+	if hasFree {
+		drawFreeSeries(ctx)
+	}
+	if err := drawCustomSeries(ctx, opts.SeriesRenderers); err != nil {
+		return err
 	}
 
 	// 标题
@@ -127,6 +154,30 @@ func assignColors(ctx *Context) {
 					base = c
 				}
 			}
+		case *option.FunnelSeries:
+			if v.Color != "" {
+				if c, err := color.Parse(string(v.Color)); err == nil {
+					base = c
+				}
+			}
+		case *option.TimelineSeries:
+			if v.Color != "" {
+				if c, err := color.Parse(string(v.Color)); err == nil {
+					base = c
+				}
+			}
+		case *option.WordCloudSeries:
+			if v.Color != "" {
+				if c, err := color.Parse(string(v.Color)); err == nil {
+					base = c
+				}
+			}
+		case *option.CustomSeries:
+			if v.Color != "" {
+				if c, err := color.Parse(string(v.Color)); err == nil {
+					base = c
+				}
+			}
 		}
 		ctx.SeriesColors[i] = base
 	}
@@ -160,6 +211,19 @@ func buildAxisScale(ax option.Axis, ctx *Context, isX bool) scale.Scale {
 	switch ax.Type {
 	case option.AxisCategory:
 		return scale.NewCategory(ax.Data, ax.IsBoundaryGap())
+	case option.AxisTime:
+		min, max := collectValueRange(ctx, isX)
+		if ax.Min != nil {
+			min = *ax.Min
+		}
+		if ax.Max != nil {
+			max = *ax.Max
+		}
+		target := ax.SplitNumber
+		if target <= 0 {
+			target = 5
+		}
+		return scale.NewTime(min, max, target)
 	default: // AxisValue 默认
 		min, max := collectValueRange(ctx, isX)
 		if ax.Min != nil {
@@ -183,14 +247,20 @@ func buildAxisScale(ax option.Axis, ctx *Context, isX bool) scale.Scale {
 // isX=true 时取 scatter 的 X 数值；false 时取 line/bar/scatter 的 Y 数值。
 func collectValueRange(ctx *Context, isX bool) (float64, float64) {
 	min, max := +1e30, -1e30
+	barStacks := map[string][]stackRange{}
 	for _, s := range ctx.Option.Series {
 		switch v := s.(type) {
 		case *option.LineSeries:
-			if isX {
-				continue
-			}
 			for _, d := range v.Data {
 				val := d.Number()
+				if isX {
+					if len(d.Values) < 2 {
+						continue
+					}
+					val = d.Values[0]
+				} else if usesDataX(ctx, v.XAxisIndex) && len(d.Values) >= 2 {
+					val = d.Values[1]
+				}
 				if val < min {
 					min = val
 				}
@@ -200,6 +270,25 @@ func collectValueRange(ctx *Context, isX bool) (float64, float64) {
 			}
 		case *option.BarSeries:
 			if isX {
+				continue
+			}
+			if v.Stack != "" {
+				key := barStackKey(v)
+				values := barStacks[key]
+				if len(values) < len(v.Data) {
+					next := make([]stackRange, len(v.Data))
+					copy(next, values)
+					values = next
+				}
+				for i, d := range v.Data {
+					val := d.Number()
+					if val >= 0 {
+						values[i].Positive += val
+					} else {
+						values[i].Negative += val
+					}
+				}
+				barStacks[key] = values
 				continue
 			}
 			for _, d := range v.Data {
@@ -227,6 +316,22 @@ func collectValueRange(ctx *Context, isX bool) (float64, float64) {
 			}
 		}
 	}
+	for _, values := range barStacks {
+		for _, v := range values {
+			if v.Positive < min {
+				min = v.Positive
+			}
+			if v.Positive > max {
+				max = v.Positive
+			}
+			if v.Negative < min {
+				min = v.Negative
+			}
+			if v.Negative > max {
+				max = v.Negative
+			}
+		}
+	}
 	if min > max {
 		min, max = 0, 1
 	}
@@ -235,6 +340,25 @@ func collectValueRange(ctx *Context, isX bool) (float64, float64) {
 		min = 0
 	}
 	return min, max
+}
+
+type stackRange struct {
+	Positive float64
+	Negative float64
+}
+
+func usesDataX(ctx *Context, axisIndex int) bool {
+	if ctx == nil || ctx.Option == nil {
+		return false
+	}
+	if axisIndex < 0 || axisIndex >= len(ctx.Option.XAxis) {
+		axisIndex = 0
+	}
+	if axisIndex >= len(ctx.Option.XAxis) {
+		return false
+	}
+	t := ctx.Option.XAxis[axisIndex].Type
+	return t == option.AxisTime || t == option.AxisValue || t == option.AxisLog
 }
 
 func drawCartesianAxes(ctx *Context) {
@@ -250,15 +374,7 @@ func drawCartesianAxes(ctx *Context) {
 // ---- series 分发 ----
 
 func drawCartesianSeries(ctx *Context) {
-	// 预扫一遍 Bar，记录每个 BarSeries 在所有 Bar 中的索引
-	barIndex := map[int]int{}
-	totalBars := 0
-	for i, s := range ctx.Option.Series {
-		if _, ok := s.(*option.BarSeries); ok {
-			barIndex[i] = totalBars
-			totalBars++
-		}
-	}
+	barInfos := computeBarDrawInfos(ctx.Option.Series)
 
 	for i, s := range ctx.Option.Series {
 		switch v := s.(type) {
@@ -277,6 +393,7 @@ func drawCartesianSeries(ctx *Context) {
 				Color:    ctx.SeriesColor(i),
 				BaseY:    ctx.GridRect.Bottom(),
 				Family:   ctx.Theme.TextStyle.FontFamily,
+				UseDataX: usesDataX(ctx, v.XAxisIndex),
 			})
 		case *option.BarSeries:
 			xs := ctx.XScale(v.XAxisIndex)
@@ -288,6 +405,7 @@ func drawCartesianSeries(ctx *Context) {
 			if cs, ok := xs.(*scale.Category); ok {
 				bandWidth = cs.BandWidth()
 			}
+			info := barInfos[i]
 			series.DrawBar(series.DrawBarArgs{
 				Canvas:         ctx.Canvas,
 				Series:         v,
@@ -295,9 +413,10 @@ func drawCartesianSeries(ctx *Context) {
 				YScale:         ys,
 				GridRect:       ctx.GridRect,
 				Color:          ctx.SeriesColor(i),
-				SeriesIndex:    barIndex[i],
-				TotalBarSeries: totalBars,
+				SeriesIndex:    info.GroupIndex,
+				TotalBarSeries: info.TotalGroups,
 				BandWidth:      bandWidth,
+				StackBases:     info.StackBases,
 			})
 		case *option.ScatterSeries:
 			xs := ctx.XScale(v.XAxisIndex)
@@ -330,6 +449,78 @@ func drawCartesianSeries(ctx *Context) {
 			})
 		}
 	}
+}
+
+type barDrawInfo struct {
+	GroupIndex  int
+	TotalGroups int
+	StackBases  []float64
+}
+
+func computeBarDrawInfos(seriesList option.SeriesList) map[int]barDrawInfo {
+	groupIndex := map[string]int{}
+	infos := map[int]barDrawInfo{}
+	positiveStacks := map[string][]float64{}
+	negativeStacks := map[string][]float64{}
+	totalGroups := 0
+
+	for i, s := range seriesList {
+		bar, ok := s.(*option.BarSeries)
+		if !ok {
+			continue
+		}
+		groupKey := barGroupKey(i, bar)
+		if _, ok := groupIndex[groupKey]; !ok {
+			groupIndex[groupKey] = totalGroups
+			totalGroups++
+		}
+
+		bases := make([]float64, len(bar.Data))
+		if bar.Stack != "" {
+			stackKey := barStackKey(bar)
+			pos := ensureStackLen(positiveStacks[stackKey], len(bar.Data))
+			neg := ensureStackLen(negativeStacks[stackKey], len(bar.Data))
+			for j, d := range bar.Data {
+				val := d.Number()
+				if val >= 0 {
+					bases[j] = pos[j]
+					pos[j] += val
+				} else {
+					bases[j] = neg[j]
+					neg[j] += val
+				}
+			}
+			positiveStacks[stackKey] = pos
+			negativeStacks[stackKey] = neg
+		}
+
+		infos[i] = barDrawInfo{GroupIndex: groupIndex[groupKey], StackBases: bases}
+	}
+	for i, info := range infos {
+		info.TotalGroups = totalGroups
+		infos[i] = info
+	}
+	return infos
+}
+
+func ensureStackLen(values []float64, n int) []float64 {
+	if len(values) >= n {
+		return values
+	}
+	out := make([]float64, n)
+	copy(out, values)
+	return out
+}
+
+func barGroupKey(index int, s *option.BarSeries) string {
+	if s.Stack != "" {
+		return barStackKey(s)
+	}
+	return fmt.Sprintf("%d/%d/series-%d", s.XAxisIndex, s.YAxisIndex, index)
+}
+
+func barStackKey(s *option.BarSeries) string {
+	return fmt.Sprintf("%d/%d/%s", s.XAxisIndex, s.YAxisIndex, s.Stack)
 }
 
 // ---- 极坐标系 series 分发 ----
@@ -381,6 +572,65 @@ func drawPolarSeries(ctx *Context) {
 	}
 }
 
+func drawFreeSeries(ctx *Context) {
+	innerBounds := contentBounds(ctx)
+	for _, s := range ctx.Option.Series {
+		switch v := s.(type) {
+		case *option.FunnelSeries:
+			series.DrawFunnel(series.DrawFunnelArgs{
+				Canvas:  ctx.Canvas,
+				Series:  v,
+				Bounds:  innerBounds,
+				Palette: paletteFor(ctx),
+				Family:  ctx.Theme.TextStyle.FontFamily,
+			})
+		case *option.TimelineSeries:
+			series.DrawTimeline(series.DrawTimelineArgs{
+				Canvas:    ctx.Canvas,
+				Series:    v,
+				Bounds:    innerBounds,
+				Palette:   paletteFor(ctx),
+				Family:    ctx.Theme.TextStyle.FontFamily,
+				TextColor: ctx.Theme.TextStyle.Color,
+				MutedText: ctx.Theme.Axis.Label.Color,
+				LineColor: ctx.Theme.Axis.SplitLine.Color,
+			})
+		case *option.WordCloudSeries:
+			series.DrawWordCloud(series.DrawWordCloudArgs{
+				Canvas:  ctx.Canvas,
+				Series:  v,
+				Bounds:  innerBounds,
+				Palette: paletteFor(ctx),
+				Family:  ctx.Theme.TextStyle.FontFamily,
+			})
+		}
+	}
+}
+
+func contentBounds(ctx *Context) geom.Rect {
+	hasTitle := ctx.Option.Title != nil && (ctx.Option.Title.Text != "" || ctx.Option.Title.Subtext != "")
+	if hasTitle {
+		return ctx.Bounds.Inset(60, 0, 0, 0)
+	}
+	return ctx.Bounds
+}
+
+func drawCustomSeries(ctx *Context, renderers map[option.SeriesKind]SeriesRenderer) error {
+	if len(renderers) == 0 {
+		return nil
+	}
+	for i, s := range ctx.Option.Series {
+		renderer := renderers[s.Kind()]
+		if renderer == nil {
+			continue
+		}
+		if err := renderer(ctx, s, i); err != nil {
+			return fmt.Errorf("render custom series %q: %w", s.Kind(), err)
+		}
+	}
+	return nil
+}
+
 func paletteFor(ctx *Context) color.Palette {
 	if ctx.Option != nil && len(ctx.Option.Color) > 0 {
 		p := make(color.Palette, 0, len(ctx.Option.Color))
@@ -415,6 +665,10 @@ func drawLegend(ctx *Context) {
 				addLegendItem(&items, seen, d.Name, paletteFor(ctx).At(j))
 			}
 			addLegendItem(&items, seen, v.GetName(), ctx.SeriesColor(i))
+		case *option.FunnelSeries:
+			for j, d := range v.Data {
+				addLegendItem(&items, seen, d.Name, paletteFor(ctx).At(j))
+			}
 		default:
 			addLegendItem(&items, seen, s.GetName(), ctx.SeriesColor(i))
 		}

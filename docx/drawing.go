@@ -41,3 +41,24 @@ func drawingXML(rid string, docPrID int, widthEMU, heightEMU int64) string {
 		widthEMU, heightEMU,
 	)
 }
+
+// chartDrawingXML 生成 OOXML 中"段落内嵌原生 chart"的 <w:drawing> 节点。
+func chartDrawingXML(rid string, docPrID int, widthEMU, heightEMU int64) string {
+	return fmt.Sprintf(`<w:p><w:r><w:drawing>`+
+		`<wp:inline distT="0" distB="0" distL="0" distR="0">`+
+		`<wp:extent cx="%d" cy="%d"/>`+
+		`<wp:effectExtent l="0" t="0" r="0" b="0"/>`+
+		`<wp:docPr id="%d" name="Chart %d"/>`+
+		`<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr>`+
+		`<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">`+
+		`<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">`+
+		`<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="%s"/>`+
+		`</a:graphicData>`+
+		`</a:graphic>`+
+		`</wp:inline>`+
+		`</w:drawing></w:r></w:p>`,
+		widthEMU, heightEMU,
+		docPrID, docPrID,
+		rid,
+	)
+}

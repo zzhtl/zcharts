@@ -4,19 +4,23 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // SeriesKind 是 series.type 字段的取值。
 type SeriesKind string
 
 const (
-	KindLine    SeriesKind = "line"
-	KindBar     SeriesKind = "bar"
-	KindPie     SeriesKind = "pie"
-	KindScatter SeriesKind = "scatter"
-	KindRadar   SeriesKind = "radar"
-	KindHeatmap SeriesKind = "heatmap"
-	KindGauge   SeriesKind = "gauge"
+	KindLine      SeriesKind = "line"
+	KindBar       SeriesKind = "bar"
+	KindPie       SeriesKind = "pie"
+	KindScatter   SeriesKind = "scatter"
+	KindRadar     SeriesKind = "radar"
+	KindHeatmap   SeriesKind = "heatmap"
+	KindGauge     SeriesKind = "gauge"
+	KindFunnel    SeriesKind = "funnel"
+	KindTimeline  SeriesKind = "timeline"
+	KindWordCloud SeriesKind = "wordCloud"
 )
 
 // Series 是所有 series 子类型实现的接口。
@@ -125,8 +129,30 @@ func decodeSeries(raw json.RawMessage) (Series, error) {
 			return nil, err
 		}
 		return &s, nil
+	case KindFunnel:
+		var s FunnelSeries
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, err
+		}
+		return &s, nil
+	case KindTimeline:
+		var s TimelineSeries
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, err
+		}
+		return &s, nil
+	case KindWordCloud:
+		var s WordCloudSeries
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, err
+		}
+		return &s, nil
 	default:
-		return nil, fmt.Errorf("unsupported series type %q", head.Type)
+		var s CustomSeries
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, err
+		}
+		return &s, nil
 	}
 }
 
@@ -190,6 +216,9 @@ func (d *DataValue) UnmarshalJSON(data []byte) error {
 				if d.Label == "" {
 					d.Label = s
 				}
+				if v, ok := parseTimeNumber(s); ok {
+					d.Values = append(d.Values, v)
+				}
 				continue
 			}
 			var v float64
@@ -224,6 +253,24 @@ func (d *DataValue) UnmarshalJSON(data []byte) error {
 		d.Values = []float64{v}
 	}
 	return nil
+}
+
+func parseTimeNumber(s string) (float64, bool) {
+	layouts := []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
+		"2006-01-02",
+		"2006/01/02 15:04:05",
+		"2006/01/02",
+	}
+	for _, layout := range layouts {
+		t, err := time.Parse(layout, s)
+		if err == nil {
+			return float64(t.UnixMilli()), true
+		}
+	}
+	return 0, false
 }
 
 // DataList 是 [DataValue]，data 数组的载体。

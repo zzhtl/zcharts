@@ -26,10 +26,11 @@ const (
 
 // RenderOptions 控制渲染过程的参数。
 type RenderOptions struct {
-	Width  float64        // 像素，默认 800
-	Height float64        // 像素，默认 500
-	Theme  string         // 主题名，默认 "default"
-	Fonts  *font.Manager  // 字体管理器，nil 时新建一个默认
+	Width           float64 // 像素，默认 800
+	Height          float64 // 像素，默认 500
+	Theme           string  // 主题名，默认 "default"
+	Fonts           *font.Manager
+	SeriesRenderers map[option.SeriesKind]render.SeriesRenderer
 }
 
 // RenderOption 是函数式选项。
@@ -50,6 +51,16 @@ func WithFonts(m *font.Manager) RenderOption {
 	return func(o *RenderOptions) { o.Fonts = m }
 }
 
+// WithSeriesRenderer 为指定 series.type 注册本次渲染使用的自定义渲染器。
+func WithSeriesRenderer(seriesType string, renderer render.SeriesRenderer) RenderOption {
+	return func(o *RenderOptions) {
+		if o.SeriesRenderers == nil {
+			o.SeriesRenderers = make(map[option.SeriesKind]render.SeriesRenderer)
+		}
+		o.SeriesRenderers[option.SeriesKind(seriesType)] = renderer
+	}
+}
+
 func defaults(opts []RenderOption) RenderOptions {
 	out := RenderOptions{Width: 800, Height: 500, Theme: "default"}
 	for _, o := range opts {
@@ -66,7 +77,9 @@ func Render(opt *option.Option, format Format, w io.Writer, opts ...RenderOption
 		return fmt.Errorf("chart: %w", err)
 	}
 	c := canvas.New(o.Width, o.Height, o.Fonts)
-	if err := render.Render(c, opt, th); err != nil {
+	if err := render.RenderWithOptions(c, opt, th, render.RenderOptions{
+		SeriesRenderers: o.SeriesRenderers,
+	}); err != nil {
 		return err
 	}
 	return c.Write(w, format)

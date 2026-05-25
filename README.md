@@ -8,11 +8,12 @@
 
 - ✅ 兼容 ECharts 5.x JSON option，迁移成本极低
 - ✅ 纯 Go 实现，无 CGO/无浏览器/无 headless Chrome 依赖
-- ✅ 一阶段支持 7 种核心图表：**折线、柱状、饼/环、散点、雷达、热力、仪表盘**
+- ✅ 支持多种常用图表：**折线、柱状/堆积柱、饼/环、散点、雷达、热力、仪表盘、漏斗、词云、时间轴**
 - ✅ PNG / SVG / PDF 三种输出格式
 - ✅ Word docx 集成：图表可直接插入到 docx 段落中（中文段落、多图混排）
 - ✅ 内置 default / dark 两套主题，与 ECharts 主题机制对齐
 - ✅ 字体可定制：内置 fallback + 用户可注册中文字体覆盖
+- ✅ 自定义图表扩展：未知 `series.type` 可通过 `chart.WithSeriesRenderer` 自行绘制
 - ✅ 架构清晰：图表生成 与 Word 集成 物理隔离，公共能力下沉到 `common/`
 
 ## 安装
@@ -51,7 +52,7 @@ func main() {
 }
 ```
 
-## 7 种核心图表
+## 图表示例
 
 完整示例位于 `examples/`：
 
@@ -59,14 +60,36 @@ func main() {
 |---|---|
 | 折线图 / 区域图 | `examples/line/` |
 | 柱状图（多 series 并排） | `examples/bar/` |
+| 堆积柱状图 | `examples/stacked_bar/` |
+| 事件时间轴 | `examples/timeline/` |
+| 折线 + 柱状图 | `examples/combo/` |
 | 饼图 / 环图 | `examples/pie/` |
 | 散点图 | `examples/scatter/` |
 | 雷达图 | `examples/radar/` |
 | 热力图 | `examples/heatmap/` |
 | 仪表盘 | `examples/gauge/` |
+| 漏斗图 | `examples/funnel/` |
+| 词云图 | `examples/wordcloud/` |
+| 自定义图表 | `examples/custom/` |
 | 多格式输出（PNG/SVG/PDF） | `examples/multi_format/` |
 | 暗黑主题 | `examples/theme_dark/` |
-| 嵌入 Word docx | `examples/docx_insert/` |
+| 嵌入 Word docx（图片路径） | `examples/docx_insert/` |
+| Word 原生图表 docx | `examples/docx_native/` |
+
+## 自定义图表
+
+当 JSON 中出现未内置的 `series.type` 时，解析器会保留为 `option.CustomSeries`。
+渲染时通过 `chart.WithSeriesRenderer` 注册同名渲染器即可绘制任意自定义图形：
+
+```go
+chart.RenderFromJSON(data, chart.FormatPNG, w,
+    chart.WithSeriesRenderer("metricCard", func(ctx *render.Context, s option.Series, index int) error {
+        ctx.Canvas.DrawRect(40, 50, 240, 100)
+        return nil
+    }))
+```
+
+完整用法见 `examples/custom/`。
 
 ## 主题切换
 
@@ -102,6 +125,8 @@ chart.Render(opt, chart.FormatPNG, w, chart.WithFonts(mgr))
 
 ```go
 import (
+    "log"
+
     "github.com/zzhtl/zcharts/docx"
     "github.com/zzhtl/zcharts/jsonopt"
 )
@@ -110,14 +135,21 @@ doc := docx.New()
 doc.AddParagraph("月度业务报告")
 doc.AddParagraph("以下为本月销售折线图：")
 
-opt, _ := jsonopt.ParseString(optionJSON)
-_ = doc.AddChart(opt, docx.AsImage(docx.PNG, 720, 400))
+opt, err := jsonopt.ParseString(optionJSON)
+if err != nil {
+    log.Fatal(err)
+}
+if err := doc.AddChart(opt, docx.AsImage(docx.PNG, 720, 400)); err != nil {
+    log.Fatal(err)
+}
 
-_ = doc.Save("report.docx")
+if err := doc.Save("assets/tmp/report.docx"); err != nil {
+    log.Fatal(err)
+}
 ```
 
 `docx.AsImage` 把图表渲染为 PNG 后嵌入到 docx 段落里。
-`docx.AsNativeChart()` 是预留的"OOXML 原生 chart XML"路径，第一阶段未实现，调用时返回 `errs.ErrNotImplemented`。
+`docx.AsNativeChart(width, height)` 优先生成 Word 原生 chart XML：折线图、柱状图、堆积柱状图、饼/环图、散点图和雷达图走标准 chart XML；热力图、仪表盘、漏斗图、时间轴和词云走 Word/WPS 形状绘制；仍无法稳定表达的图表会自动退回 PNG 嵌入。
 
 ## 架构
 
@@ -130,13 +162,13 @@ font/          字体管理（内置 fallback + 用户可注册）
 canvas/        绘制抽象层（封装 tdewolff/canvas，输出 PNG/SVG/PDF）
 render/        渲染引擎
   ├── coord/   坐标系（直角 / 极坐标）
-  ├── scale/   线性 / 分类 / 时间 / 对数刻度
+  ├── scale/   线性 / 分类 / 时间刻度
   ├── layout/  标题 / 图例 / 网格 / 坐标轴
   └── series/  各 series 类型渲染器
 common/        通用工具：color / geom / number / text / errs
 docx/          Word docx 集成（与 chart 解耦的独立子领域）
   ├── ooxml/   docx zip 包结构 + relationships
-  └── chart/   原生 chart XML 占位（未实现）
+  └── chart/   Word 原生 chart XML + VML 形状绘制
 ```
 
 依赖方向严格单向：`common ← font/theme/option ← canvas ← render ← chart ← docx`。
@@ -145,22 +177,29 @@ docx/          Word docx 集成（与 chart 解耦的独立子领域）
 
 - 动画 / 交互 / tooltip 实时显示（静态图表场景）
 - ECharts 扩展生态（GL / Map / Tree / Sankey 等高级图形）
-- Word docx 中的"原生 chart XML"路径（仅留接口）
-- stack 堆叠 series（已规划，未实现）
+- Word 原生 chart XML 目前覆盖 line / bar / stacked bar / pie / doughnut / scatter / radar；heatmap / gauge / funnel / timeline / wordCloud 通过 Word/WPS 形状绘制近似表达
+- ECharts 所有高级布局能力的完全等价实现
 
 ## 运行示例
 
 ```bash
-go run ./examples/line       # → line.png
-go run ./examples/bar        # → bar.png
-go run ./examples/pie        # → pie.png
-go run ./examples/scatter    # → scatter.png
-go run ./examples/radar      # → radar.png
-go run ./examples/heatmap    # → heatmap.png
-go run ./examples/gauge      # → gauge.png
-go run ./examples/multi_format    # → multi.{png,svg,pdf}
-go run ./examples/theme_dark      # → dark.png
-go run ./examples/docx_insert     # → report.docx
+go run ./examples/line        # → assets/tmp/line.png
+go run ./examples/bar         # → assets/tmp/bar.png
+go run ./examples/stacked_bar # → assets/tmp/stacked_bar.png
+go run ./examples/timeline    # → assets/tmp/timeline.png
+go run ./examples/combo       # → assets/tmp/combo.png
+go run ./examples/pie         # → assets/tmp/pie.png
+go run ./examples/scatter     # → assets/tmp/scatter.png
+go run ./examples/radar       # → assets/tmp/radar.png
+go run ./examples/heatmap     # → assets/tmp/heatmap.png
+go run ./examples/gauge       # → assets/tmp/gauge.png
+go run ./examples/funnel      # → assets/tmp/funnel.png
+go run ./examples/wordcloud   # → assets/tmp/wordcloud.png
+go run ./examples/custom      # → assets/tmp/custom.png
+go run ./examples/multi_format # → assets/tmp/multi.{png,svg,pdf}
+go run ./examples/theme_dark   # → assets/tmp/dark.png
+go run ./examples/docx_insert  # → assets/tmp/report.docx
+go run ./examples/docx_native  # → assets/tmp/native_charts.docx
 ```
 
 ## 许可证

@@ -21,6 +21,7 @@ type DrawLineArgs struct {
 	Color    color.Color // 主色（来自调色板或 series.color）
 	BaseY    float64     // areaStyle 填充时的基准 y（一般是 grid 底边）
 	Family   string      // 默认字体 family
+	UseDataX bool        // true 时 data 数组的前两个数值分别作为 x/y
 }
 
 // DrawLine 绘制一条折线 series（包含可选的面积填充和数据点 symbol）。
@@ -34,8 +35,9 @@ func DrawLine(a DrawLineArgs) {
 	// 计算每个点的像素位置
 	points := make([]geom.Point, 0, len(data))
 	for i, d := range data {
-		x := a.XScale.Pixel(float64(i))
-		y := a.YScale.Pixel(d.Number())
+		xVal, yVal := linePointValue(d, i, a.UseDataX)
+		x := a.XScale.Pixel(xVal)
+		y := a.YScale.Pixel(yVal)
 		points = append(points, geom.Point{X: x, Y: y})
 	}
 
@@ -108,6 +110,13 @@ func DrawLine(a DrawLineArgs) {
 			c.DrawCircle(p.X, p.Y, size/2)
 		}
 	}
+}
+
+func linePointValue(d option.DataValue, index int, useDataX bool) (float64, float64) {
+	if useDataX && len(d.Values) >= 2 {
+		return d.Values[0], d.Values[1]
+	}
+	return float64(index), d.Number()
 }
 
 // drawSmoothPath 用 Catmull-Rom → Cubic Bezier 转换，绘制平滑曲线（pts[0] 已 MoveTo）。

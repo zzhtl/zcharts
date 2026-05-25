@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"sort"
 )
 
 // Part 是 docx 包内的一个文件条目。
@@ -86,10 +87,22 @@ func (p *Package) contentTypesXML() []byte {
 	var buf bytes.Buffer
 	buf.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
 	buf.WriteString(`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`)
-	for ext, ct := range p.defaultExtensions {
+	defaults := make([]string, 0, len(p.defaultExtensions))
+	for ext := range p.defaultExtensions {
+		defaults = append(defaults, ext)
+	}
+	sort.Strings(defaults)
+	for _, ext := range defaults {
+		ct := p.defaultExtensions[ext]
 		fmt.Fprintf(&buf, `<Default Extension="%s" ContentType="%s"/>`, ext, ct)
 	}
-	for path, ct := range p.overrides {
+	overrides := make([]string, 0, len(p.overrides))
+	for path := range p.overrides {
+		overrides = append(overrides, path)
+	}
+	sort.Strings(overrides)
+	for _, path := range overrides {
+		ct := p.overrides[path]
 		fmt.Fprintf(&buf, `<Override PartName="%s" ContentType="%s"/>`, path, ct)
 	}
 	buf.WriteString(`</Types>`)
