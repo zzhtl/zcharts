@@ -23,9 +23,6 @@ type LegendPlacement struct {
 	Side string
 }
 
-// 图例内部留白：图例外接矩形与绘图区之间的间距。
-const legendContentGap = 8
-
 // DrawLegend 在 bounds 内绘制图例。topInset 为标题底部到 bounds 顶的距离，
 // 用于让默认（顶部）图例落在标题下方。
 func DrawLegend(c zcanvas.Canvas, bounds geom.Rect, items []LegendItem, opt *option.Legend, th *theme.Theme, topInset float64) {

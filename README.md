@@ -77,6 +77,7 @@ func main() {
 | 嵌入 Word docx（图片路径） | `examples/docx_insert/` |
 | Word 原生图表 docx | `examples/docx_native/` |
 | Word 完整报告（标题/正文/列表/表格/图表组合） | `examples/docx_report/` |
+| 打开已有 Word 并按标题追加内容 | `examples/docx_edit/` |
 | Word 全图表对照（每种图表「图片样式 vs Word 图表样式」并排） | `examples/docx_gallery/` |
 
 ## 自定义图表
@@ -237,6 +238,7 @@ go run ./examples/theme_dark   # → assets/tmp/dark.png
 go run ./examples/docx_insert  # → assets/tmp/report.docx
 go run ./examples/docx_native  # → assets/tmp/native_charts.docx
 go run ./examples/docx_report  # → assets/tmp/full_report.docx（标题/正文/列表/表格/图表组合）
+go run ./examples/docx_edit # → assets/tmp/edit_updated.docx（打开已有 Word 并按标题追加内容）
 go run ./examples/docx_gallery # → assets/tmp/gallery.docx（所有图表：图片样式 vs Word 图表样式 并排对照）
 ```
 

@@ -264,7 +264,7 @@ func wrapTimelineText(c zcanvas.Canvas, s string, style zcanvas.TextStyle, maxWi
 	}
 	var lines []string
 	var cur []rune
-	for _, r := range []rune(s) {
+	for _, r := range s {
 		candidate := string(append(cur, r))
 		w, _, _ := c.MeasureText(candidate, style)
 		if w <= maxWidth || len(cur) == 0 {
