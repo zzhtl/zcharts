@@ -351,7 +351,9 @@ func vmlParagraph(width, height int, body string) string {
 
 func writeShapeTitle(b *strings.Builder, opt *option.Option, width int) int {
 	if opt != nil && opt.Title != nil && opt.Title.Text != "" {
-		b.WriteString(vmlText(20, 12, width-40, 24, opt.Title.Text, "#222222", 14, true))
+		// 标题 14pt 加粗，CJK 单行高约 24~28px（WPS 行距更大），框高需留足余量，
+		// 否则文字底部会被固定高度的文本框裁掉（标题"截断"）。
+		b.WriteString(vmlText(20, 8, width-40, 34, opt.Title.Text, "#222222", 14, true))
 		return 48
 	}
 	return 24
@@ -392,8 +394,12 @@ func vmlText(x, y, width, height int, text, color string, size int, bold bool) s
 		boldXML = `<w:b/>`
 	}
 	wordColor := strings.TrimPrefix(shapeColor(color, "#333333"), "#")
-	return fmt.Sprintf(`<v:shape style="position:absolute;left:%dpx;top:%dpx;width:%dpx;height:%dpx" stroked="f" filled="f"><v:textbox inset="0,0,0,0"><w:txbxContent><w:p><w:r><w:rPr>%s<w:color w:val="%s"/><w:sz w:val="%d"/></w:rPr><w:t xml:space="preserve">%s</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape>`, x, y, width, height, boldXML, wordColor, size*2, escape(text))
+	return fmt.Sprintf(`<v:shape style="position:absolute;left:%dpx;top:%dpx;width:%dpx;height:%dpx" stroked="f" filled="f"><v:textbox inset="0,0,0,0"><w:txbxContent><w:p>%s<w:r><w:rPr>%s<w:color w:val="%s"/><w:sz w:val="%d"/></w:rPr><w:t xml:space="preserve">%s</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape>`, x, y, width, height, vmlParaPr, boldXML, wordColor, size*2, escape(text))
 }
+
+// vmlParaPr 清零文本框段落的段前后距并锁定单倍行距，避免 Word/WPS 默认段落间距
+// 把文字下顶、被固定高度的文本框裁切。
+const vmlParaPr = `<w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>`
 
 func vmlWordText(x, y, width, height int, text, color string, size int, bold bool) string {
 	if text == "" || width <= 0 || height <= 0 {
@@ -406,7 +412,7 @@ func vmlWordText(x, y, width, height int, text, color string, size int, bold boo
 		boldXML = `<w:b/>`
 	}
 	wordColor := strings.TrimPrefix(shapeColor(color, "#333333"), "#")
-	return fmt.Sprintf(`<v:shape style="position:absolute;left:%dpx;top:%dpx;width:%dpx;height:%dpx;mso-wrap-style:none" stroked="f" filled="f"><v:textbox inset="0,0,0,0" style="mso-fit-shape-to-text:t"><w:txbxContent><w:p><w:r><w:rPr>%s<w:noProof/><w:color w:val="%s"/><w:sz w:val="%d"/></w:rPr><w:t xml:space="preserve">%s</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape>`, x, y, width, height, boldXML, wordColor, size*2, escape(text))
+	return fmt.Sprintf(`<v:shape style="position:absolute;left:%dpx;top:%dpx;width:%dpx;height:%dpx;mso-wrap-style:none" stroked="f" filled="f"><v:textbox inset="0,0,0,0" style="mso-fit-shape-to-text:t"><w:txbxContent><w:p>%s<w:r><w:rPr>%s<w:noProof/><w:color w:val="%s"/><w:sz w:val="%d"/></w:rPr><w:t xml:space="preserve">%s</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape>`, x, y, width, height, vmlParaPr, boldXML, wordColor, size*2, escape(text))
 }
 
 // estimateTextWidth 估算文字像素宽度（偏大以确保 Word 文本框够宽、单行不被裁）。
